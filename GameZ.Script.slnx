@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GameZ.Script.Core/GameZ.Script.Core.csproj" />
+    <Project Path="src/GameZ.Script.LanguageServer/GameZ.Script.LanguageServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/"><Project Path="tests/GameZ.Script.Tests/GameZ.Script.Tests.csproj" /></Folder>
+</Solution>

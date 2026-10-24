@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>GameZ.Script.Core</RootNamespace>
+    <AssemblyName>GameZ.Script.Core</AssemblyName>
+    <!-- Required by source-generated Windows filesystem interop. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup><EmbeddedResource Include="Formats/field-layouts.json" /></ItemGroup>
+  <ItemGroup><PackageReference Include="Clipper2" /></ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="GameZ.Script.Tests" />
+
+  </ItemGroup>
+</Project>

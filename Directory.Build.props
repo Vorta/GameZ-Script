@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Keep the restore graph identical for ordinary builds and win-x64 publish. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <Company>Vorta</Company>
+    <Product>GameZ Script</Product>
+    <Description>GameZ Script language tools for RECOIL</Description>
+    <RepositoryUrl>https://github.com/Vorta/GameZ-Script</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>

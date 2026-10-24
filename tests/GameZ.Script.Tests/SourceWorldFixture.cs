@@ -1,0 +1,345 @@
+using System.IO;
+using System.Text;
+using GameZ.Script.Core;
+using GameZ.Script.Core.Export;
+using GameZ.Script.Core.Worlds;
+
+namespace GameZ.Script.Tests;
+
+/// <summary>
+/// A source project with two missions: m1 loads its ground, m2 its ground and an unplaced tank from its vehicle folder,
+/// whose texture only m2's folders hold and whose destruction animation only m2's animation list names.
+/// </summary>
+internal sealed class SourceWorldFixture : IDisposable
+{
+    public string Root { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zstudio-world-" + Guid.NewGuid().ToString("N"));
+    public string Project => System.IO.Path.Combine(Root, "project");
+    public string Tank => "data/m2/models/bft/tank.gltf";
+    public const string TankDefinitions = "data/common/zrdr/enemies/tank.zad";
+
+    private static string WorldScript(string mission, string loads) => string.Join("\r\n",
+        "set worldName world",
+        $"SetModelDirectory ..\\data\\{mission}\\models",
+        $"SetTextureDirectory ..\\data\\{mission}\\textures",
+        "NewWorld %worldName%", "FindNode %worldName%", "GameGenSetWorld %worldName%", "FindNode %worldName%",
+        "WorldOrigin 0.0 512.0", "WorldExtents 512.0 -512.0", "WorldPartition 256 -256",
+        $"LoadGameGen {mission}.gltf {mission}.flt", $"DeleteTree {mission}.flt",
+        loads,
+        $"GameZWriteZBDFile ..\\{mission}\\gamez.zbd", "Quit", "");
+
+    public SourceWorldFixture()
+    {
+        Write("gamegen/m1.gs", WorldScript("m1", "# no vehicles"));
+        Write("gamegen/m2.gs", WorldScript("m2", "SetModelDirectory ..\\data\\m2\\models\\bft\r\nLoadGameGen tank.gltf tank"));
+        WorldTexture rock = new("rock"), camo = new("camo");
+        Model("data/m1/models", "m1", "../textures", Node("ground", Quad(new() { Texture = rock, Flags = 0x1FF }, 64, 0)));
+        Model("data/m2/models", "m2", "../textures", Node("ground", Quad(new() { Texture = rock, Flags = 0x1FF }, 64, 0)));
+        var hull = Node("hull", Quad(new() { Texture = camo, Flags = 0x1FF }, 4, 1));
+        Model("data/m2/models/bft", "tank", "../../textures/bft", hull);
+        Png("data/m1/textures/rock.png", 255, 0, 0); Png("data/m2/textures/rock.png", 255, 0, 0); Png("data/m2/textures/bft/camo.png", 0, 128, 0);
+        Write("data/m1/zrdr/anim.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                GRAVITY ( -9.8 )
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION_FILE ( "..\\data\\m1\\zrdr\\gates.zad" )
+                )
+              )
+            )
+            """);
+        Write("data/m1/zrdr/gates.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION (
+                    NAME ( ground )
+                    ANIMATION_NAME ( sink )
+                    ACTIVATION ( ON_CALL )
+                    SEQUENCE_DEFINITION ( NAME ( down ) OBJECT_ACTIVE_STATE ( NAME ( ground ) STATE ( INACTIVE ) ) )
+                  )
+                )
+              )
+            )
+            """);
+        Write("data/m2/zrdr/anim.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                GRAVITY ( -9.8 )
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION_FILE ( "..\\data\\common\\zrdr\\enemies\\tank.zad" )
+                )
+              )
+            )
+            """);
+        Write(TankDefinitions, """
+            (
+              ANIMATION_DEFINITIONS (
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION (
+                    NAME ( tank )
+                    ANIMATION_NAME ( tank_die )
+                    ACTIVATION ( ON_CALL )
+                    SEQUENCE_DEFINITION ( NAME ( boom ) OBJECT_ACTIVE_STATE ( NAME ( hull ) STATE ( INACTIVE ) ) )
+                  )
+                )
+              )
+            )
+            """);
+    }
+
+    public string Path(string relative) => System.IO.Path.Combine(Project, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+    public void Write(string relative, string text) => Write(relative, Encoding.ASCII.GetBytes(text));
+    public void Write(string relative, byte[] bytes) { string path = Path(relative); Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!); File.WriteAllBytes(path, bytes); }
+    public void WritePickupTemplate()
+    {
+        var (json, bin) = WorldGltf.Export([Node("chip", Quad(new() { Texture = new("rock"), Flags = 0x1FF }, 1, 1)),
+            Node("bvol", Quad(new(), 2, 0))], 0xFF, new() { Texture = _ => ("../textures/rock.png", 0) }).Write("chip.bin");
+        Write("data/m1/models/chip.gltf", json); Write("data/m1/models/chip.bin", bin);
+        Write("gamegen/m1.gs", File.ReadAllText(Path("gamegen/m1.gs")).Replace("GameZWriteZBDFile", "LoadGameGen chip.gltf pu037\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+    }
+    private void Png(string relative, byte r, byte g, byte b)
+    {
+        byte[] rgba = new byte[4 * 4 * 4];
+        for (int i = 0; i < 16; i++) { rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b; rgba[i * 4 + 3] = 255; }
+        Write(relative, PngEncoder.Encode(new DecodedImage(4, 4, rgba)));
+    }
+    private static WorldNode Node(string name, WorldModel? model = null)
+    {
+        WorldNode node = new(name, WorldNodeClass.Object3D) { Model = model, Flags = WorldGltf.DefaultCarried };
+        node.SetPayloadInt(0, 0x28);
+        return node;
+    }
+    private static WorldModel Quad(WorldMaterial material, float size, float y)
+    {
+        ModelBuilder builder = new();
+        builder.Add(new([new(0, y, 0), new(size, y, 0), new(size, y, -size), new(0, y, -size)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [], material));
+        return builder.Finish();
+    }
+    private void Model(string folder, string stem, string textures, params WorldNode[] roots)
+    {
+        // These authored fixture loads participate in altitude/collision probing at their load root as well as their mesh.
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new() { Texture = t => ($"{textures}/{t.Name}.png", 0) }, loadRoot: Node(stem + ".flt")).Write(stem + ".bin");
+        Write($"{folder}/{stem}.bin", bin); Write($"{folder}/{stem}.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with the ground and a crate that references a model file, <c>lidm.gltf</c>, holding a lid;
+    /// <paramref name="twice"/> adds a second crate, crate_b, referencing the same file.
+    /// </summary>
+    public void WriteReferencingDatabase(bool twice = false)
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var (lidJson, lidBin) = WorldGltf.Export([Node("lid", Quad(rock, 4, 2))], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("lidm.bin");
+        Write("data/m1/models/lidm.bin", lidBin); Write("data/m1/models/lidm.gltf", lidJson);
+        var crate = Node("crate"); crate.Children.Add(Node("placeholder"));
+        var crateB = Node("crate_b"); crateB.Children.Add(Node("placeholder"));
+        HashSet<WorldNode> references = new(ReferenceEqualityComparer.Instance) { crate, crateB };
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), crate, .. twice ? [crateB] : Array.Empty<WorldNode>()], 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Reference = n => references.Contains(n) ? "lidm.gltf" : null, Content = n => references.Contains(n) ? [.. n.Children] : null,
+        }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>A referenced, rotated turret under nested m2 groups, with instance cleanup hiding its wreck.</summary>
+    public void WriteReferencedTurretDatabase()
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var healthy = Node("healthy", Quad(rock, 4, 1));
+        healthy.Children.Add(Node("barrel", Quad(rock, 2, 3)));
+        var (modelJson, modelBin) = WorldGltf.Export([healthy, Node("wreck", Quad(rock, 4, 2))], 0xFF,
+            new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("turret.bin");
+        Write("data/m2/models/turret.bin", modelBin); Write("data/m2/models/turret.gltf", modelJson);
+        var turret = Node("tur_101"); turret.Children.Add(Node("placeholder"));
+        var rotation = System.Numerics.Matrix4x4.CreateRotationY(MathF.PI / 4);
+        float[] rows = [rotation.M11, rotation.M12, rotation.M13, rotation.M21, rotation.M22, rotation.M23,
+            rotation.M31, rotation.M32, rotation.M33, 0, 0, 0];
+        turret.SetPayloadInt(0, 0x30);
+        for (int i = 0; i < rows.Length; i++) turret.SetPayloadFloat(0x30 + i * 4, rows[i]);
+        var inner = Node("turret_group"); inner.Children.Add(turret);
+        var outer = Node("base_group"); outer.Children.Add(inner);
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), outer], 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0), Group = n => ReferenceEquals(n, outer) || ReferenceEquals(n, inner),
+            Reference = n => ReferenceEquals(n, turret) ? "turret.gltf" : null,
+            Content = n => ReferenceEquals(n, turret) ? [.. n.Children] : null,
+        }).Write("m2.bin");
+        Write("data/m2/models/m2.bin", bin); Write("data/m2/models/m2.gltf", json);
+        Write("data/m2/zrdr/ai.zrd", "DESTROY_ANIM ( destroy_turret ) TURRET ( tur_1** ( PARTS ( healthy ) ) )");
+        string definitions = File.ReadAllText(Path(TankDefinitions));
+        Write(TankDefinitions, definitions.Replace("ANIMATION_LIST (", """
+            ANIMATION_LIST (
+              ANIMATION_DEFINITION (
+                NAME ( tur_101 ) ANIMATION_NAME ( destroy_turret ) ACTIVATION ( ON_CALL )
+                RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( wreck ) STATE ( INACTIVE ) ) )
+                SEQUENCE_DEFINITION ( NAME ( destroy ) OBJECT_ACTIVE_STATE ( NAME ( healthy ) STATE ( INACTIVE ) ) )
+              )
+            """, StringComparison.Ordinal));
+    }
+    /// <summary>
+    /// Gives m1 a sky: a dome textured <c>sky.png</c>, loaded under the world as its <c>horizon</c> node, a landmark as in
+    /// the shipped worlds (the world's own child list, which the game's lookup by name searches, rather than a grid cell).
+    /// </summary>
+    public void WriteHorizon()
+    {
+        Model("data/m1/models", "sky", "../textures", Node("dome", Quad(new() { Texture = new("sky"), Flags = 0x1FF }, 8, 9)));
+        Png("data/m1/textures/sky.png", 0, 0, 255);
+        string script = File.ReadAllText(Path("gamegen/m1.gs"));
+        Write("gamegen/m1.gs", script.Replace("GameZWriteZBDFile", "LoadGameGen sky.gltf horizon\r\nSetLandmark on\r\nFindNode %worldName%\r\nAddChild horizon\r\nGameZWriteZBDFile", StringComparison.Ordinal));
+    }
+    /// <summary>Replaces m1's database with the ground and a crate holding a lid.</summary>
+    public void WriteNestedDatabase(bool lookupEdits = false, bool secondGround = false)
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var crate = Node("crate", Quad(rock, 4, 1)); crate.Children.Add(Node("lid", Quad(rock, 4, 2)));
+        var earlier = Node("crate_a", Quad(rock, 4, 1)); earlier.Children.Add(Node("lid", Quad(rock, 4, 2)));
+        WorldNode[] records = [Node("ground", Quad(rock, 64, 0)), .. lookupEdits ? [earlier] : Array.Empty<WorldNode>(), crate,
+            .. lookupEdits ? [Node("post", Quad(rock, 1, 0))] : Array.Empty<WorldNode>(),
+            .. secondGround ? [Node("ground", Quad(rock, 8, 1))] : Array.Empty<WorldNode>()];
+        var (json, bin) = WorldGltf.Export(records, 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with ground and two gates sharing one node (an instance, as 1999 m9's sgate1–sgate8 share
+    /// the node holding gate): the file places the shared node, and its gate, under each gate.
+    /// </summary>
+    public void WriteSharedDatabase()
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var shared = Node(""); shared.Children.Add(Node("gate", Quad(rock, 2, 1)));
+        var gates = new[] { Node("sgate1"), Node("sgate2") };
+        foreach (var g in gates) { g.Children.Add(shared); shared.Parents.Add(g); }
+        var (json, bin) = WorldGltf.Export([Node("ground", Quad(rock, 64, 0)), .. gates], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with the ground and two references to one part, <c>m1_01.gltf</c>, which holds a crate with
+    /// a lid and a post; the build copies the part twice.
+    /// </summary>
+    /// <param name="secondGround">Adds a second, smaller ground as the database's last record, so it is made after the first.</param>
+    public void WritePartDatabase(bool secondGround = false)
+    {
+        WorldMaterial rock = new() { Texture = new("rock"), Flags = 0x1FF };
+        var crate = Node("crate", Quad(rock, 4, 1)); crate.Children.Add(Node("lid", Quad(rock, 4, 2)));
+        var (partJson, partBin) = WorldGltf.Export([crate, Node("post", Quad(rock, 1, 0))], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1_01.bin");
+        Write("data/m1/models/m1_01.bin", partBin); Write("data/m1/models/m1_01.gltf", partJson);
+        HashSet<WorldNode> references = new(ReferenceEqualityComparer.Instance);
+        WorldNode Reference() { var r = Node("m1_01.flt"); r.Children.Add(Node("placeholder")); references.Add(r); return r; }
+        WorldNode[] records = [Node("ground", Quad(rock, 64, 0)), Reference(), Reference(), .. secondGround ? [Node("ground", Quad(rock, 8, 1))] : Array.Empty<WorldNode>()];
+        var (json, bin) = WorldGltf.Export(records, 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Reference = n => references.Contains(n) ? "m1_01.gltf" : null, Group = references.Contains, Content = n => references.Contains(n) ? [.. n.Children] : null,
+        }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+    /// <summary>
+    /// Replaces m1's database with: ground (named by an animation), two adjacent flat pieces in zone 3, a piece over
+    /// one of them with the same attributes, and a landmark sky. <paramref name="grouped"/> puts the three pieces in a
+    /// group and adds, before the sky, a reference to a part (<c>m1_01.gltf</c>) holding another piece.
+    /// </summary>
+    public void WriteTerrainDatabase(bool grouped = false)
+    {
+        WorldTexture rock = new("rock");
+        WorldNode Piece(string name, float x0, float z0, float size, float y, uint flags = WorldGltf.DefaultCarried, uint zone = 3)
+        {
+            ModelBuilder builder = new();
+            builder.Add(new([new(x0, y, z0 + size), new(x0 + size, y, z0 + size), new(x0 + size, y, z0), new(x0, y, z0)], [new(0, 0), new(1, 0), new(1, 1), new(0, 1)], [], [],
+                new() { Texture = rock, Flags = 0x1FF }, Zone: 0xFFFF0001 | zone << 8));
+            WorldNode node = new(name, WorldNodeClass.Object3D) { Model = builder.Finish(), Flags = flags, Zone = zone };
+            node.SetPayloadInt(0, 0x28);
+            return node;
+        }
+        List<WorldNode> pieces = [Piece("flat_a", 200, 300, 50, 0), Piece("flat_b", 250, 300, 50, 0), Piece("flat_over", 210, 310, 20, 10)];
+        List<WorldNode> roots = [Piece("ground", 0, 0, 64, 0), .. pieces, Piece("sky", 0, 0, 512, 400, WorldGltf.DefaultCarried | 0x80, 0xFF)];
+        HashSet<WorldNode> groups = new(ReferenceEqualityComparer.Instance);
+        WorldNode? part = null;
+        if (grouped)
+        {
+            var (partJson, partBin) = WorldGltf.Export([Piece("far", 400, 100, 20, 0)], 0xFF, new() { Texture = t => ($"../textures/{t.Name}.png", 0) }).Write("m1_01.bin");
+            Write("data/m1/models/m1_01.bin", partBin); Write("data/m1/models/m1_01.gltf", partJson);
+            var group = Node("g1"); foreach (var piece in pieces) group.Children.Add(piece);
+            part = Node("m1_01.flt"); part.Children.Add(Node("placeholder"));
+            groups.Add(group); groups.Add(part);
+            roots = [roots[0], group, part, roots[^1]];
+        }
+        var (json, bin) = WorldGltf.Export(roots, 0xFF, new()
+        {
+            Texture = t => ($"../textures/{t.Name}.png", 0),
+            Group = groups.Contains, Reference = n => ReferenceEquals(n, part) ? "m1_01.gltf" : null, Content = n => ReferenceEquals(n, part) ? [.. n.Children] : null,
+        }).Write("m1.bin");
+        Write("data/m1/models/m1.bin", bin); Write("data/m1/models/m1.gltf", json);
+    }
+
+    /// <summary>
+    /// Adds m3, whose world loads a player tank as <c>bft_00</c> (the first AIV record): tracks, hover wings the load cleanup
+    /// hides, turret doors and a gun holding five weapons' models. Its vehicle resource lists five weapons and the track
+    /// block's lists; its animations hold the transitions to hover only, so amphibious and sub are unavailable.
+    /// </summary>
+    public void WritePlayerTank()
+    {
+        WorldTexture rock = new("rock");
+        Write("gamegen/m3.gs", WorldScript("m3", "SetModelDirectory ..\\data\\m3\\models\\bft\r\nLoadGameGen bft.gltf bft_00"));
+        Model("data/m3/models", "m3", "../textures", Node("ground", Quad(new() { Texture = rock, Flags = 0x1FF }, 64, 0)));
+        Png("data/m3/textures/rock.png", 255, 0, 0);
+        WorldNode Part(string name, float y) => Node(name, Quad(new() { Texture = rock, Flags = 0x1FF }, 1, y));
+        var body = Node("body"); body.Children.Add(Part("tracks", 0)); body.Children.Add(Part("wings_hover", 0.5f));
+        var gun = Node("gun");
+        foreach (string weapon in new[] { "RFPG_L", "RFPG_R", "ERFPG_L", "ERFPG_R", "HEM", "NAPALM", "LO-EM" }) gun.Children.Add(Part(weapon, 2));
+        var turret = Node("turret"); turret.Children.Add(Part("doorleft", 1.5f)); turret.Children.Add(Part("doorright", 1.5f)); turret.Children.Add(gun);
+        Model("data/m3/models/bft", "bft", "../../textures", body, turret);
+        Write("data/m3/zrdr/aiv.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
+        // As retail m2 Easy: the player twice.
+        Write("data/m3/zrdr/aiv_easy.zrd", "( bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) bft_00 ( 0 ( 10.0 0.0 -10.0 ) 0.0 ) )");
+        Write("data/m3/zrdr/vehicle.zrd", """
+            ( bft (
+              common_mode ( weapons (
+                ( wep_2.0 1 0 3 1.2 5.0 5.0 1 1 ) ( wep_1.0 1 1 123456789 0.15 5.0 100.0 1 2 ) ( wep_1.1 2 1 300 0.12 5.0 300.0 1 2 )
+                ( wep_3.1 2 0 40 0.35 5.0 20.0 1 1 ) ( wep_8.0 3 0 5 2.0 5.0 3.0 0 1 ) ) )
+              track_mode ( mode ( track ) t2a_anims ( tracks_to_none none_to_amphib ) t2h_anims ( tracks_to_none none_to_hover ) )
+              amphib_mode ( mode ( amphib ) a2s_anims ( amphib_to_none body_to_sub ) )
+              hover_mode ( mode ( hover ) )
+              sub_mode ( mode ( sub ) )
+            ) )
+            """);
+        Write("data/m3/zrdr/weapons.zrd", """
+            ( BALLISTICS (
+              wep_1.0 ( NAME ( RFPG ) ) wep_1.1 ( NAME ( ERFPG ) ) wep_2.0 ( NAME ( HEM ) )
+              wep_3.1 ( NAME ( NAPALM ) CATCHES_FIRE ( 1 ) ) wep_8.0 ( NAME ( LO-EM ) )
+            ) )
+            """);
+        // As m1's opening: it takes the controls and gives them back from the tank's pose, without moving the tank.
+        Write("data/m3/zrdr/startanims.zrd", "( NEW_GAME_START ( ( m3_start_animation ) ) )");
+        Write("data/m3/zrdr/anim.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                GRAVITY ( -9.8 )
+                ANIMATION_LIST ( ANIMATION_DEFINITION_FILE ( "..\\data\\m3\\zrdr\\bftm3.zad" ) )
+              )
+            )
+            """);
+        Write("data/m3/zrdr/bftm3.zad", """
+            (
+              ANIMATION_DEFINITIONS (
+                ANIMATION_LIST (
+                  ANIMATION_DEFINITION (
+                    NAME ( bft_00 ) ANIMATION_NAME ( tracks_to_none ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 )
+                    RESET_STATE ( OBJECT_ACTIVE_STATE ( NAME ( wings_hover ) STATE ( INACTIVE ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( fold ) OBJECT_ACTIVE_STATE ( NAME ( tracks ) STATE ( INACTIVE ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( bft_00 ) ANIMATION_NAME ( none_to_hover ) ACTIVATION ( ON_CALL ) RESET_TIME ( -1.0 -1.0 )
+                    SEQUENCE_DEFINITION ( NAME ( unfold ) OBJECT_ACTIVE_STATE ( NAME ( wings_hover ) STATE ( ACTIVE ) ) )
+                  )
+                  ANIMATION_DEFINITION (
+                    NAME ( ground ) ANIMATION_NAME ( m3_start_animation ) ACTIVATION ( ON_CALL ) RESET_TIME ( 0 -1 )
+                    RESET_STATE ( CALLBACK ( VALUE ( 15 ) ) CALLBACK ( VALUE ( 10 ) ) )
+                    SEQUENCE_DEFINITION ( NAME ( hold ) CALLBACK ( VALUE ( 14 ) ) )
+                  )
+                )
+              )
+            )
+            """);
+    }
+
+    public void Dispose() { try { Directory.Delete(Root, true); } catch (IOException) { } }
+}
