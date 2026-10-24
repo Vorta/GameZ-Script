@@ -6,7 +6,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const rpc = require('vscode-jsonrpc/node');
 (async () => {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'gamez-lsp-'));
+  // .NET expands existing Windows 8.3 components when normalizing file paths.
+  const temporary = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gamez-lsp-')));
   const executable = process.env.GAMEZ_SERVER || path.resolve(__dirname, '../server/GameZ.Script.LanguageServer.exe');
   const child = cp.spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let errors = ''; child.stderr.on('data', b => errors += b);
@@ -40,8 +41,12 @@ const rpc = require('vscode-jsonrpc/node');
     const callbackHover = await connection.sendRequest('textDocument/hover', {textDocument:{uri},position:{line:0,character:callback.indexOf('912')}});
     assert(callbackHover.contents.value.includes('vwbus'));
     await connection.sendNotification('textDocument/didChange', {textDocument:{uri,version:4},contentChanges:[{text:source}]});
-    await new Promise(resolve=>setTimeout(resolve,1200));
-    const latest = notices.filter(n=>decodeURIComponent(n.uri).toLowerCase()===decodeURIComponent(uri).toLowerCase()).at(-1); assert.equal(latest.version,4); assert.equal(latest.diagnostics.length,0);
+    const matching = () => notices.filter(n=>decodeURIComponent(n.uri).toLowerCase()===decodeURIComponent(uri).toLowerCase()).at(-1);
+    const diagnosticDeadline = Date.now() + 10000;
+    while (matching()?.version !== 4 && Date.now() < diagnosticDeadline) await new Promise(resolve=>setTimeout(resolve,50));
+    const latest = matching();
+    assert.equal(latest?.version,4, `Missing version-4 diagnostics for ${uri}; received ${JSON.stringify(notices.map(n=>({uri:n.uri,version:n.version})))}`);
+    assert.equal(latest.diagnostics.length,0);
     await connection.sendNotification('textDocument/didClose', {textDocument:{uri}});
     await connection.sendRequest('shutdown'); await connection.sendNotification('exit');
     console.log('PASS GameZ Script LSP initialization, live buffers, hover, completion, symbols, diagnostic versions');
