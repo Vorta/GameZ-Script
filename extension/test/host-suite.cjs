@@ -10,6 +10,7 @@ exports.run = async function() {
   assert.equal(validation.files,3,'Project validation with native VS Code URI');
   // This minimal project has no world script, giving a deep-only finding to invalidate.
   const deepErrors = ()=>vscode.languages.getDiagnostics(file).filter(d=>d.code==='RECOIL_PROJECT' && d.message.includes('World binding validation'));
+  for(let attempt=0;attempt<50 && deepErrors().length===0;attempt++) await new Promise(resolve=>setTimeout(resolve,100));
   assert(deepErrors().length>0,'Deep validation finding is published');
   const recipe = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/coast.terrain.json');
   await vscode.workspace.fs.writeFile(recipe, Buffer.from('{}'));

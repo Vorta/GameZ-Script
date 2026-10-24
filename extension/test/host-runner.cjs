@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const {runTests} = require('@vscode/test-electron');
 (async()=>{
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(),'gamez-vscode-'));
+  // Launch VS Code with the same expanded Windows path spelling used by .NET.
+  const profile = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'gamez-vscode-')));
   const workspace = path.join(profile,'project');
   fs.mkdirSync(path.join(workspace,'gamegen'),{recursive:true}); fs.mkdirSync(path.join(workspace,'data/m1/zrdr'),{recursive:true});
   fs.writeFileSync(path.join(workspace,'data/m1/zrdr/anim.zad'),'(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (NAME (root) ANIMATION_NAME (child)))))');
