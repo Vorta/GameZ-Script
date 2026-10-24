@@ -15,4 +15,4 @@ dotnet test --solution GameZ.Script.slnx -c Release --no-build
 
 Run `npm run test:host` from `extension/` on an isolated desktop. `GAMEZ_VSCODE` may select an installed VS Code executable; otherwise the test runner downloads VS Code. All test projects are temporary and require no game data.
 
-The VSIX is written to `artifacts/`. Install it with VS Code's **Install from VSIX…** command. Releases are private GitHub releases, not Marketplace publications. Before publishing, run CI and the extension-host check, verify the package version, then attach the VSIX and `SHA256SUMS` to the approved Git tag.
+The VSIX is written to `artifacts/`. Install it with VS Code's **Install from VSIX…** command. Releases are available from [GitHub Releases](https://github.com/Vorta/GameZ-Script/releases). Marketplace publication requires a separate explicit request. Before publishing a release, run CI and the extension-host check, verify the package version, then attach the VSIX and `SHA256SUMS` to the approved Git tag. Published release tags are immutable.

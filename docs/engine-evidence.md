@@ -1,8 +1,8 @@
 # Engine evidence
 
-What the retail RECOIL engine does that source projects, builds and previews rely on (how to use it: AGENTS.md). Facts only the running game can settle: in-game acceptance (T1–T20).
+Recorded findings about the retail RECOIL engine used by the parser, compiler and world-validation support sources. These notes were inherited from zStudio; references to its builds and previews describe that original context. See AGENTS.md for evidence-handling rules.
 
-Labels: **[B]** byte-matched in the reconstruction; **[BN]** confirmed in the executable; **[D]** measured on the shipped 1998/1999 data; **[U]** reconstruction only or inference. Addresses are 1999 retail unless noted. The private references (retail database, reconstruction) are described in architecture; they are not build dependencies.
+Labels: **[B]** byte-matched in the reconstruction; **[BN]** confirmed in the executable; **[D]** measured on the shipped 1998/1999 data; **[U]** reconstruction only or inference. Addresses are 1999 retail unless noted. The retail database, engine reconstruction and game data used as research evidence are not included in this repository and are not build or test dependencies.
 
 ## Common rules
 

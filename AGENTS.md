@@ -1,6 +1,6 @@
 # GameZ Script agent rules
 
-GameZ Script is a standalone Windows x64 VS Code extension for RECOIL `.zad` and `.zrd` text sources. This repository is private. Do not change its visibility or publish to the VS Code Marketplace without an explicit request.
+GameZ Script is a standalone Windows x64 VS Code extension for RECOIL `.zad` and `.zrd` text sources. This repository is public. Do not change its visibility or publish to the VS Code Marketplace without an explicit request.
 
 - Build and test without zStudio, engine checkouts, game assets, Python or Blender. The repository owns its parser/compiler support sources; never add a reference to a sibling checkout or installed application.
 - Preserve the language ID `gamez-script` and extension ID `Vorta.gamez-script`. Source-project format compatibility, including the `.zstudio` directory name, is a file-format contract, not a dependency on the editor.
