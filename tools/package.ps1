@@ -21,7 +21,7 @@ try {
         npm run package
         if ($LASTEXITCODE -ne 0) { throw 'VSIX packaging failed.' }
     } finally { Pop-Location }
-    $package = Join-Path $repository 'artifacts/gamez-script-1.0.0-win32-x64.vsix'
+    $package = Join-Path $repository 'artifacts/gamez-script-1.1.0-win32-x64.vsix'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($package)
     try {
@@ -30,5 +30,10 @@ try {
         }
         if (@($zip.Entries | Where-Object { $_.FullName -match '(^|/)(node_modules|data|gamegen|test|src)/' }).Count) { throw 'VSIX contains development files or project data.' }
     } finally { $zip.Dispose() }
-    Get-FileHash -LiteralPath $package -Algorithm SHA256
+    $version = (Get-Content -Raw (Join-Path $extension 'package.json') | ConvertFrom-Json).version
+    $serverVersion = (Get-Item (Join-Path $extension 'server/GameZ.Script.LanguageServer.exe')).VersionInfo.ProductVersion.Split('+')[0]
+    if ($serverVersion -ne $version) { throw "Server version $serverVersion does not match extension version $version" }
+    $hash = Get-FileHash -LiteralPath $package -Algorithm SHA256
+    $hash
+    ($hash.Hash.ToLowerInvariant() + '  ' + (Split-Path -Leaf $package)) | Set-Content -Encoding ascii (Join-Path $repository 'artifacts/SHA256SUMS')
 } finally { Pop-Location }

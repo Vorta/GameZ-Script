@@ -74,10 +74,12 @@ public sealed class LanguageProject
     {
         if (!documents.TryGetValue(path, out var doc)) return [];
         offset = Math.Clamp(offset, 0, doc.Text.Length);
+        if (RecoilLanguage.InComment(doc, offset)) return [];
         var record = doc.Records.Where(r => r.Value != null && doc.Span(r.Value).Start <= offset &&
             (doc.Span(r.Value).End > offset || offset == doc.Text.Length && doc.CompletionText != null && doc.spans[r.Value.Id].End > offset))
             .MinBy(r => doc.Span(r.Value!).Length);
-        if (record != null && referenceNames.TryGetValue((doc.Path, doc.Span(record.KeyNode).Start), out var names))
+        if (record != null && RecoilLanguage.AcceptsReferenceCompletion(doc, offset)
+            && referenceNames.TryGetValue((doc.Path, doc.Span(record.KeyNode).Start), out var names))
         {
             string prefix = RecoilLanguage.CompletionPrefix(doc, offset);
             var span = RecoilLanguage.CompletionSpan(doc, offset);

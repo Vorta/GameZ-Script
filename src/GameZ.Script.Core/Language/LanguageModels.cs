@@ -6,7 +6,11 @@ namespace GameZ.Script.Core.Language;
 public sealed record LanguageDiagnostic(string Code, string Severity, string Message, TextSpan Span, string? Mission = null);
 public sealed record LanguageToken(TextSpan Span, string Text, string Kind);
 public sealed record LanguageSymbol(string Name, string Kind, TextSpan Span, TextSpan Selection, IReadOnlyList<LanguageSymbol> Children);
-public sealed record LanguageCompletion(string Label, string Detail, string InsertText, string Kind = "keyword", string? Documentation = null, TextSpan? ReplacementSpan = null);
+public sealed record LanguageCompletion(string Label, string Detail, string InsertText, string Kind = "keyword", string? Documentation = null, TextSpan? ReplacementSpan = null, bool IsSnippet = false);
+public sealed record LanguageInlayHint(TextSpan Span, string Label, string Documentation);
+public sealed record LanguageInlayHints(IReadOnlyList<LanguageInlayHint> Items, bool Truncated);
+public sealed record LanguageParameter(string Label, string Documentation);
+public sealed record LanguageSignature(string Label, string Documentation, IReadOnlyList<LanguageParameter> Parameters, int ActiveParameter);
 public sealed record LanguageLocation(string Path, TextSpan Span, string? Context = null);
 public sealed record LanguageHover(string Markdown, TextSpan Span);
 public sealed record LanguageField(string Name, string Description, string Shape = "", string[]? Choices = null, string? Reference = null,
@@ -30,6 +34,7 @@ public sealed class LanguageDocument
     internal string? CompletionText;
     internal List<LanguageRecord> Records = [];
     internal List<TextSpan> PositionalValues = [];
+    internal LanguageArgumentModel Arguments = new();
     internal LanguageDocument(string path, string text) { Path = path; Text = text; }
     internal TextSpan Span(ZrdNode node)
     {
@@ -44,6 +49,20 @@ public sealed class LanguageDocument
         else if (diagnostics.Count == RecoilLanguage.MaximumDiagnostics)
             diagnostics.Add(new("RECOIL_LIMIT", "information", "Further diagnostics omitted; analysis is incomplete.", new(0, 0)));
     }
+}
+
+internal sealed record LanguageArgument(string? Label, string Type, string Documentation = "", string[]? Choices = null,
+    LanguageArgument[]? Children = null, bool Repeat = false, string? Role = null, string? InactiveReason = null);
+internal sealed record LanguageArgumentContainer(ZrdNode Node, string Name, LanguageArgument[] Parameters, bool Repeat, int Count, bool TaggedTail, int MaximumCount);
+internal sealed class LanguageArgumentModel
+{
+    internal readonly Dictionary<int, LanguageInlayHint> Hints = [];
+    // Keep operand documentation available even when its inline label repeats the field name.
+    internal readonly HashSet<int> HiddenHints = [];
+    internal readonly HashSet<Guid> Owned = [];
+    internal readonly HashSet<int> OwnedOffsets = [];
+    internal readonly Dictionary<LanguageArgument, string> Documentation = [];
+    internal readonly List<LanguageArgumentContainer> Containers = [];
 }
 
 internal sealed record LanguageRecord(string Key, ZrdNode KeyNode, ZrdNode? Value, LanguageRecord? Parent)

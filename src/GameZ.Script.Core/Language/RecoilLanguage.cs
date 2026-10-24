@@ -56,6 +56,7 @@ public static partial class RecoilLanguage
             }
         }
         result.Family = PartialFamily(result.tokens);
+        if (result.Family == "resource") result.Family = FileFamily(path);
         int unsupported = text.AsSpan().IndexOfAnyExceptInRange('\0', '\xFF');
         if (unsupported >= 0) result.Report("RECOIL_ENCODING", "error", "Source files use Latin-1. This character cannot be saved in the source encoding.", new(unsupported, 1));
         if (result.Root != null)
@@ -64,6 +65,7 @@ public static partial class RecoilLanguage
             while (root.Children.Count == 1 && root.Children[0].Kind == ZrdKind.Array) root = root.Children[0];
             Collect(result, root, null, token);
             result.Family = Classify(result);
+            if (result.Family == "resource") result.Family = FileFamily(path);
             if (result.Family is "sounds" or "effects")
             {
                 // Classification needs the outer tags. Once known, collect mixed positional/tagged
@@ -74,6 +76,7 @@ public static partial class RecoilLanguage
             if (result.Complete) Validate(result, token);
             int remaining = MaximumResults;
             result.Symbols = Symbols(result, null, ref remaining);
+            BuildArguments(result, token);
         }
         return result;
     }
@@ -138,8 +141,12 @@ public static partial class RecoilLanguage
     public static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument document, int offset)
     {
         offset = Math.Clamp(offset, 0, document.Text.Length);
+        if (InComment(document, offset)) return [];
         var replacement = CompletionSpan(document, offset);
         string prefix = CompletionPrefix(document, offset);
+        if (ArgumentCompletions(document, offset) is { } arguments)
+            return arguments.Where(item => item.IsSnippet && prefix.Length == 0 || item.Label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Take(MaximumResults).Select(item => item with { ReplacementSpan = replacement }).ToArray();
         return CompletionItems(document, offset).Where(item => item.Label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             .Select(item => item with { ReplacementSpan = replacement }).ToArray();
     }
@@ -187,6 +194,8 @@ public static partial class RecoilLanguage
     {
         var item = document.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
         if (item == null) return null;
+        if (document.Arguments.Hints.TryGetValue(item.Span.Start, out var hint)) return new(hint.Documentation, item.Span);
+        if (document.Arguments.OwnedOffsets.Contains(item.Span.Start)) return null;
         if (document.PositionalValues.Any(span => span.Start <= offset && offset < span.End)) return null;
         var record = document.Records.FirstOrDefault(r => document.Span(r.KeyNode) == item.Span);
         var context = Context(document, item.Span.Start).Where(p => p.Length > 0).ToArray();
@@ -214,6 +223,29 @@ public static partial class RecoilLanguage
              !document.Tokens.Any(t => t.Span.Start >= document.Span(r.KeyNode).End && t.Span.Start < offset)));
     }
     // Delimiters and scalar tokens come from the strict parser even when a final ')' is still being typed.
+    internal static bool InComment(LanguageDocument doc, int offset)
+    {
+        offset = Math.Clamp(offset, 0, doc.Text.Length);
+        int start = 0;
+        foreach (var token in doc.Tokens)
+        {
+            if (token.Span.Start >= offset) break;
+            // Parsed strings may contain literal # and newlines.
+            if (token.Span.End > offset) return false;
+            start = token.Span.End;
+        }
+        bool comment = false, quoted = false;
+        for (int i = start; i < offset; i++)
+        {
+            char c = doc.Text[i];
+            if (comment) { if (c == '\n') comment = false; }
+            else if (quoted) { if (c == '\\') i++; else if (c == '"') quoted = false; }
+            else if (c == '"') quoted = true;
+            else if (c == '#') comment = true;
+        }
+        return comment;
+    }
+
     internal static List<string> Context(LanguageDocument doc, int offset)
     {
         List<string> stack = []; string previous = "";

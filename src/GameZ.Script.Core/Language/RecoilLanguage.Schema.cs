@@ -252,8 +252,8 @@ public static partial class RecoilLanguage
                 if (!Eligible(node)) { doc.Report("RECOIL_NODE_ID", "error", "Spatial node names must be node_00 through node_98.", doc.Span(node.KeyNode)); continue; }
                 // Spatial records are distinct from interleaved valve/constraint records.
                 if (node.Values.Count != 3 || node.Values[1].Kind != ZrdKind.Array || node.Values[2].Kind != ZrdKind.Array)
-                { doc.Report("RECOIL_NODE_SHAPE", "error", "Spatial node expects an integer ID, an XYZ float tuple, and three integer links.", doc.Span(node.Value!)); continue; }
-                if (node.Values[0].Kind != ZrdKind.Int) doc.Report("RECOIL_TYPE", "error", "Spatial node ID must be a stored integer.", doc.Span(node.Values[0]));
+                { doc.Report("RECOIL_NODE_SHAPE", "error", "Spatial node expects an unused integer, an XYZ float tuple, and three integer links. Its index comes from its name.", doc.Span(node.Value!)); continue; }
+                if (node.Values[0].Kind != ZrdKind.Int) doc.Report("RECOIL_TYPE", "error", "Spatial node's unused first value must be a stored integer.", doc.Span(node.Values[0]));
                 CheckShape(doc, node with { Value = node.Values[1] }, "f f f");
                 CheckShape(doc, node with { Value = node.Values[2] }, "i i i");
                 foreach (var link in node.Values[2].Children.Where(n => n.Kind == ZrdKind.Int))

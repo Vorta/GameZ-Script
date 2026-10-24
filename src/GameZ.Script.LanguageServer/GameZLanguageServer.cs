@@ -36,10 +36,12 @@ public sealed class GameZLanguageServer : IDisposable
                 positionEncoding = "utf-16", textDocumentSync = new { openClose = true, change = 1, save = new { includeText = false } },
                 completionProvider = new { resolveProvider = false, triggerCharacters = new[] { "(", " " } },
                 hoverProvider = true, definitionProvider = true, documentSymbolProvider = true,
+                inlayHintProvider = new { resolveProvider = false },
+                signatureHelpProvider = new { triggerCharacters = new[] { "(", " " }, retriggerCharacters = new[] { " " } },
                 executeCommandProvider = new { commands = new[] { "gamez.server.validateProject" } },
                 workspace = new { workspaceFolders = new { supported = true, changeNotifications = true } }
             },
-            serverInfo = new { name = "GameZ Script", version = "1.0.0" }
+            serverInfo = new { name = "GameZ Script", version = "1.1.0" }
         };
     }
     [JsonRpcMethod("initialized", UseSingleObjectParameterDeserialization = true)] public void Initialized(JsonObject _) { }
@@ -222,7 +224,44 @@ public sealed class GameZLanguageServer : IDisposable
         // Core already filters decoded prefixes. Keep the client's filter compatible with source quotes/escapes,
         // and re-query such lists as the user types instead of filtering a cached decoded spelling.
         string Filter(LanguageCompletion item) => Quoted(item) ? doc.Text[item.ReplacementSpan!.Value.Start..offset] + item.Label : item.Label;
-        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults || items.Any(i => i.Kind == "reference" || Quoted(i)), items = items.Select(i => new { label = i.Label, filterText = Filter(i), detail = i.Detail, documentation = i.Documentation == null ? null : new { kind = "markdown", value = i.Documentation }, textEdit = new { range = Range(doc.Text, i.ReplacementSpan ?? new(offset, 0)), newText = i.InsertText }, kind = i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
+        return new { isIncomplete = items.Count >= RecoilLanguage.MaximumResults || items.Any(i => i.Kind == "reference" || Quoted(i)), items = items.Select(i => new { label = i.Label, filterText = Filter(i), detail = i.Detail, documentation = i.Documentation == null ? null : new { kind = "markdown", value = i.Documentation }, textEdit = new { range = Range(doc.Text, i.ReplacementSpan ?? new(offset, 0)), newText = i.InsertText }, insertTextFormat = i.IsSnippet ? 2 : 1, kind = i.IsSnippet ? 15 : i.Kind == "reference" ? 18 : i.Kind == "enumMember" ? 20 : 14 }) };
+    }
+    [JsonRpcMethod("textDocument/inlayHint", UseSingleObjectParameterDeserialization = true)]
+    public async Task<object> InlayHints(JsonObject args, CancellationToken token)
+    {
+        var (doc, _, _) = await Document(args, token, false);
+        int start = Offset(doc.Text, args["range"]?["start"]), end = Offset(doc.Text, args["range"]?["end"]);
+        var hints = RecoilLanguage.InlayHints(doc, new(start, Math.Max(0, end - start)), token);
+        if (hints.Truncated) await Console.Error.WriteLineAsync("GameZ Script: inlay hint limit reached for requested range; request a smaller range.");
+        // Build the line index once: thousands of hints must not rescan the entire buffer individually.
+        var lines = new List<int> { 0 };
+        for (int i = 0; i < doc.Text.Length; i++) if (doc.Text[i] == '\n') lines.Add(i + 1);
+        var result = hints.Items.Select(h =>
+        {
+            token.ThrowIfCancellationRequested();
+            int line = lines.BinarySearch(h.Span.Start); if (line < 0) line = ~line - 1;
+            return new { position = new { line, character = h.Span.Start - lines[line] }, label = h.Label, kind = 2,
+                paddingRight = true, tooltip = new { kind = "markdown", value = h.Documentation } };
+        }).ToArray();
+        CheckCurrent(doc, token);
+        return result;
+    }
+    private void CheckCurrent(LanguageDocument doc, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        lock (gate)
+            if (stopped || !buffers.TryGetValue(new Uri(doc.Path).AbsoluteUri, out var current) || current.Text != doc.Text)
+                throw new OperationCanceledException("Source buffer changed during language request.");
+    }
+    [JsonRpcMethod("textDocument/signatureHelp", UseSingleObjectParameterDeserialization = true)]
+    public async Task<object?> SignatureHelp(JsonObject args, CancellationToken token)
+    {
+        var (doc, _, offset) = await Document(args, token, false);
+        var signature = RecoilLanguage.SignatureHelp(doc, offset);
+        CheckCurrent(doc, token);
+        return signature == null ? null : new { activeSignature = 0, activeParameter = signature.ActiveParameter,
+            signatures = new[] { new { label = signature.Label, documentation = new { kind = "markdown", value = signature.Documentation },
+                parameters = signature.Parameters.Select(p => new { label = p.Label, documentation = new { kind = "markdown", value = p.Documentation } }).ToArray() } } };
     }
     [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
     public async Task<object?> Hover(JsonObject args, CancellationToken token)

@@ -29,7 +29,7 @@ public static partial class RecoilLanguage
         };
         var fields = ResourceFields.GetValueOrDefault(family) ?? [];
         return fields.Where(f => allowed == null || allowed.Contains(f.Name, StringComparer.Ordinal)).Select(f => ResourceHelp(family, f))
-            .Concat(AdditionalResourceFields(family, path)).DistinctBy(f => f.Name);
+            .Concat(AdditionalResourceFields(family, path).Select(f => ResourceHelp(family, f))).DistinctBy(f => f.Name);
     }
 
     private static LanguageField ResourceHelp(string family, LanguageField field)
@@ -176,7 +176,7 @@ public static partial class RecoilLanguage
             _ => null
         };
         bool suggested = key is not (("vehicle", "position" or "rotation") or ("network", "attack_range") or ("hud", "VERSION"));
-        return field with { Description = description ?? field.Description, Arguments = arguments, Notes = notes, Suggested = suggested,
+        var result = field with { Description = description ?? field.Description, Arguments = arguments, Notes = notes, Suggested = suggested,
             UsageWarning = key switch
             {
                 ("vehicle", "position") => "position is not used in common_mode. Set the vehicle's position in aiv.zrd.",
@@ -187,5 +187,22 @@ public static partial class RecoilLanguage
             },
             ValidateValues = suggested && family != "fonts",
             Choices = key == ("vehicle", "mode") ? ["basic", "track", "hover", "amphib", "sub", "fly"] : field.Choices };
+        return family == "network" ? NetworkHelp(result) : result;
     }
+
+    private static LanguageField NetworkHelp(LanguageField field) => field.Name switch
+    {
+        "version" => field with { Description = "Network version. RECOIL accepts 105 or an absent version; another version silently drops the network.", Choices = ["105"] },
+        "name" => field with { Description = "Network display name, copied into the engine's 20-byte name buffer." },
+        "type" => field with { Choices = ["standard", "hide", "fixed", "defilade"], Notes = "The first two letters select the type; unknown values select standard. Standard follows its route and returns after an attack. Hide/fixed stay and face the player. Defilade moves from home to its first link and back, using fixed 4-second and 14-second waits." },
+        "attack_strategy" => field with { Description = "How a vehicle moves while attacking.", Choices = ["FOLLOW_NET", "CIRCLE", "HEAD_ON", "BACK_AND_FORTH", "ZIGZAG", "SIT"], Notes = "The first three letters are compared to uppercase FOL/CIR/HEA/BAC/ZIG/SIT. Missing or unrecognized values select head-on. Follow-net continues the route; circle orbits; back-and-forth charges and retreats; sit stays facing the player. Zigzag has no steering implementation and retains the last controls." },
+        "activate_rad" => field with { Description = "Horizontal distance within which the vehicle acts unless alerted.", Notes = "Zero only wakes the vehicle when it is alerted." },
+        "attack_rad" => field with { Description = "3D distance between target points within which a visible player can trigger an attack.", Notes = "Zero uses approximately 38.7. Vehicles cannot start an attack during their first 10 seconds." },
+        "attack_dwell" => field with { Description = "Attack burst duration in seconds.", Notes = "Zero uses 10 seconds; this does not end a chase." },
+        "not_pursuit_dwell" => field with { Description = "Pause between bursts and cooldown after a chase, in seconds.", Notes = "Zero stays zero. This does not end a chase." },
+        "return_range" => field with { Description = "Maximum chase distance from the route node targeted when the attack began.", Notes = "Zero stays zero. The chase also ends if the player dies." },
+        "hide_times" => field with { Description = "Two loaded but unused timing values.", Notes = "Defaults are 8 and 4. Defilade actually uses fixed 4-second and 14-second waits." },
+        "pursuit_params" or "pursuit_range" => field with { Description = "Two strategy-dependent pursuit distances.", Notes = "pursuit_params takes precedence over pursuit_range. Head-on uses minimum/maximum distance; circle uses the first as orbit range and ignores the second; back-and-forth uses attack range and lateral movement. Other strategies use neither." },
+        _ => field
+    };
 }

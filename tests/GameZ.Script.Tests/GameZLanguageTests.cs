@@ -84,7 +84,7 @@ public sealed class GameZLanguageTests
         var doc = Analyze("sounds.zrd", text);
         Assert.Empty(doc.Diagnostics);
         int name = text.IndexOf("VOLUME", StringComparison.Ordinal);
-        Assert.Null(RecoilLanguage.Hover(doc, name));
+        Assert.Contains("sample ID", RecoilLanguage.Hover(doc, name)!.Markdown);
         Assert.Empty(RecoilLanguage.Complete(doc, name + 3));
         Assert.Single(Analyze("sounds.zrd", text.Replace("1.0", "1", StringComparison.Ordinal)).Diagnostics, d => d.Code == "RECOIL_TYPE");
         Assert.Empty(Analyze("sounds.zrd", "(SETS (group ((RANGE volume.wav 1.0 TRUE FALSE TRUE))))").Diagnostics);

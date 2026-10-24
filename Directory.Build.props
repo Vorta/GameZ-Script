@@ -16,6 +16,6 @@
     <Description>GameZ Script language tools for RECOIL</Description>
     <RepositoryUrl>https://github.com/Vorta/GameZ-Script</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 </Project>
