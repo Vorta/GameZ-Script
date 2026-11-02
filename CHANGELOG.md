@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 — 2026-11-02
+
+- Support the optional reRECOIL 1.0.7.3 AI beam pause as a tenth vehicle weapon operand. Require a finite nonnegative FLOAT; nine-operand entries remain byte-identical. Warn on ignored player/non-beam settings, with matching hints and signature help.
+- Clarify vehicle camback values with chase lateral offset, height and distance, numbered second-vector axes, and first-person local offset axes. Keep unverified camera roles explicit.
+- Preserve all nine weapon-row labels and their verified hover/signature explanations.
+- Recover language assistance after a failed server launch or initialization using Restart Language Server, retaining unsaved buffers and cleaning up previous clients and watchers.
+
 ## 1.2.0 — 2026-11-02
 
 - Add a dedicated GameGen Script mode for `.gs`/`.gw`, command recognition, operand hover, completion, signatures, inlay hints, outline, and project navigation.

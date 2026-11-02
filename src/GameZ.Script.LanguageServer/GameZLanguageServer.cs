@@ -42,7 +42,7 @@ public sealed class GameZLanguageServer : IDisposable
                 executeCommandProvider = new { commands = new[] { "gamez.server.validateProject" } },
                 workspace = new { workspaceFolders = new { supported = true, changeNotifications = true } }
             },
-            serverInfo = new { name = "GameZ Script", version = "1.2.0" }
+            serverInfo = new { name = "GameZ Script", version = "1.3.0" }
         };
     }
     [JsonRpcMethod("initialized", UseSingleObjectParameterDeserialization = true)] public void Initialized(JsonObject _) { }

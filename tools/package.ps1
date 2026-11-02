@@ -21,7 +21,7 @@ try {
         npm run package
         if ($LASTEXITCODE -ne 0) { throw 'VSIX packaging failed.' }
     } finally { Pop-Location }
-    $package = Join-Path $repository 'artifacts/gamez-script-1.2.0-win32-x64.vsix'
+    $package = Join-Path $repository 'artifacts/gamez-script-1.3.0-win32-x64.vsix'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($package)
     try {

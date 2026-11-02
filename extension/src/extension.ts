@@ -5,7 +5,10 @@ import { LanguageClient, LanguageClientOptions, ServerOptions } from 'vscode-lan
 let client: LanguageClient | undefined;
 let watcher: vscode.FileSystemWatcher | undefined;
 let lifecycle: Promise<void> = Promise.resolve();
+let deactivating = false;
+let retireClient: () => Promise<void> = async () => {};
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    deactivating = false;
     const output = vscode.window.createOutputChannel('GameZ Script', { log: true });
     context.subscriptions.push(output);
     const encodingDiagnostics = vscode.languages.createDiagnosticCollection('gamez-script-encoding');
@@ -25,6 +28,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.workspace.onDidChangeTextDocument(event => checkEncoding(event.document)), vscode.workspace.onDidSaveTextDocument(checkEncoding),
         vscode.workspace.onDidCloseTextDocument(document => encodingDiagnostics.delete(document.uri)));
     vscode.workspace.textDocuments.forEach(checkEncoding);
+    retireClient = async (): Promise<void> => {
+        const previous = client;
+        client = undefined;
+        // dispose marks the old client as disposed even if shutdown rejects in Starting state.
+        // This also prevents its connection-closed handler from restarting it behind the new client.
+        try { await previous?.dispose(); }
+        catch (error) { output.warn(`Retiring language client: ${String(error)}`); }
+        finally { watcher?.dispose(); watcher = undefined; }
+    };
     const start = async (): Promise<void> => {
         const server: ServerOptions = { command: context.asAbsolutePath(path.join('server', 'GameZ.Script.LanguageServer.exe')), options: { cwd: context.extensionPath } };
         watcher?.dispose();
@@ -38,7 +50,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await client.start();
     };
     const restart = (): Promise<void> => {
-        lifecycle = lifecycle.catch(() => undefined).then(async () => { await client?.stop(); await start(); });
+        lifecycle = lifecycle.catch(() => undefined).then(async () => {
+            if (deactivating) return;
+            await retireClient();
+            if (deactivating) return;
+            try { await start(); }
+            catch (error) {
+                await retireClient();
+                output.error(`Language server start failed: ${String(error)}`);
+                // Activation must finish so the restart command stays available after a failed launch.
+                void vscode.window.showErrorMessage('GameZ Script could not start its language server. Use GameZ Script: Restart Language Server to try again.', 'Restart server')
+                    .then(action => { if (action && !deactivating) void restart(); });
+            }
+        });
         return lifecycle;
     };
     context.subscriptions.push(vscode.commands.registerCommand('gamez.restartLanguageServer', restart));
@@ -46,6 +70,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const editor = vscode.window.activeTextEditor;
         if (!editor || !['gamez-script', 'gamez-gamegen'].includes(editor.document.languageId)) { void vscode.window.showInformationMessage('Open a GameZ Script source file first.'); return; }
         if (!vscode.workspace.isTrusted) { void vscode.window.showInformationMessage('Trust this workspace to validate the source project.'); return; }
+        if (!client?.isRunning()) {
+            void vscode.window.showInformationMessage('GameZ Script language server is unavailable. Run GameZ Script: Restart Language Server, then validate again.');
+            return;
+        }
         try {
             await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'GameZ Script: validating project', cancellable: true }, async (_, token) => {
                 const result = await client?.sendRequest<{files: number; errors: number; warnings: number}>('workspace/executeCommand', { command: 'gamez.server.validateProject', arguments: [editor.document.uri.toString()] }, token);
@@ -54,7 +82,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         } catch (error) { if (!(error instanceof Error && error.message.includes('cancel'))) void vscode.window.showErrorMessage(`GameZ Script: ${String(error)}`); }
     }));
     context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(restart));
-    lifecycle = start();
-    await lifecycle;
+    await restart();
 }
-export async function deactivate(): Promise<void> { await lifecycle.catch(() => undefined); watcher?.dispose(); await client?.stop(); }
+export async function deactivate(): Promise<void> { deactivating = true; await lifecycle.catch(() => undefined); await retireClient(); }

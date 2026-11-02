@@ -1,0 +1,38 @@
+const vscode = require('vscode');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+exports.run = async function() {
+  const extension = vscode.extensions.getExtension('Vorta.gamez-script');
+  assert(extension);
+  const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/vehicle.zrd');
+  const disk = '(bft (common_mode (health (10.0 20.0))))';
+  await vscode.workspace.fs.writeFile(uri,Buffer.from(disk));
+  const doc = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(doc);
+  await extension.activate(); // Must finish even when launch/initialization fails.
+  assert(extension.isActive,'Extension remains active and its recovery command is available');
+  const text = '(bft (common_mode (camback ((0.0 4.0 9.0) (0.0 3.0 2.0) (0.0 2.0 1.0)) weapons ((wep_2.0\n1\n0\n3\n1.2\n5.0\n5.0\n1\n1)))))';
+  await editor.edit(edit=>edit.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),text));
+  const server = path.join(extension.extensionPath,'server/GameZ.Script.LanguageServer.exe');
+  // This is a disposable copy of the extension, never the installed or repository server.
+  assert(extension.extensionPath.startsWith(process.env.GAMEZ_RECOVERY_ROOT + path.sep));
+  fs.mkdirSync(path.dirname(server),{recursive:true});
+  fs.copyFileSync(process.env.GAMEZ_RECOVERY_SERVER_SOURCE,server);
+  await Promise.all([vscode.commands.executeCommand('gamez.restartLanguageServer'),vscode.commands.executeCommand('gamez.restartLanguageServer')]);
+  const range = new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length));
+  const hints = await vscode.commands.executeCommand('vscode.executeInlayHintProvider',uri,range);
+  assert.equal(hints.length,18,'One recovered provider returns exactly one set of hints');
+  assert.equal(hints[0].label,'chase lateral offset:');
+  assert.equal(hints[9].label,'weapon:');
+  const signature = await vscode.commands.executeCommand('vscode.executeSignatureHelpProvider',uri,hints[3].position);
+  assert.equal(signature.signatures[0].parameters[0].label,'camera vector 2 x');
+  const hover = await vscode.commands.executeCommand('vscode.executeHoverProvider',uri,hints[6].position);
+  assert(hover.some(h=>h.contents.some(c=>c.value?.includes('Vehicle-local'))));
+  assert.equal(doc.getText(),text.replace(/\n/g,doc.eol===vscode.EndOfLine.CRLF?'\r\n':'\n'),'Recovery retains the unsaved buffer');
+  assert.equal(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString(),disk,'Recovery leaves source bytes unchanged');
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  assert.equal((await vscode.commands.executeCommand('vscode.executeInlayHintProvider',uri,range)).length,18,'Repeated recovery does not duplicate providers');
+  await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  console.log('PASS failed '+process.env.GAMEZ_RECOVERY_MODE+' recovery without reload; hints, signatures, hover and unsaved source');
+};

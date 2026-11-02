@@ -1,4 +1,5 @@
 using GameZ.Script.Core.Formats;
+using GameZ.Script.Core.Sources;
 
 namespace GameZ.Script.Core.Language;
 
@@ -18,16 +19,24 @@ public static partial class RecoilLanguage
         A("mission threshold", "i", "Single player: available when nonzero and no greater than the mission number. Multiplayer uses its mission availability table."),
         A("dual mount", "i", "The low bit selects the weapon mount layout: 0 uses the single model; 1 uses the _L and _R model variants. Higher bits do not select the layout."),
         A("starting ammo", "i", "Initial ammunition/charge; read as an integer then converted to float."),
-        A("repeat delay (s)", "f", "Delay between dispatches."),
+        A("repeat delay (s)", "f", "Delay between dispatches. For AI beam weapons this is beam duration; the optional beam pause controls the wait after the beam ends."),
         A("AI minimum range", "f", "Lower attack range supplied to the AI weapon selection."),
         A("AI maximum range", "f", "Upper attack range supplied to the AI weapon selection."),
         A("recoil flag", "i", "Stored firing-slot recoil flags. No unverified bit meanings are inferred."),
-        A("initial hardpoint state", "i", "Initial weapon hardpoint selection state. No unverified enum names are inferred.")
+        A("initial hardpoint state", "i", "Initial weapon hardpoint selection state. No unverified enum names are inferred."),
+        A("beam pause (s)", "f?", "Optional reRECOIL 1.0.7.3 AI beam pause: the beam lasts the delay (value 5), then waits this many seconds after ending. Absent or 0.0 uses the delay as the pause. Applies only to AI wep_6.0, wep_6.1 and wep_7.1; ignored on the player's bft vehicle and other weapons. Requires a finite nonnegative FLOAT node (type 2), such as 4.0. Older engines described by the supplied compatibility contract ignore this operand.")
     ];
 
     private static void BuildArguments(LanguageDocument doc, CancellationToken token)
     {
         if (doc.Root == null) return;
+        if (doc.Family == "vehicle")
+            foreach (var list in VehicleWeaponRules.Lists(doc.Root, token))
+            {
+                BindArguments(doc, list.Value, "weapons", [new LanguageArgument("row", "a", Children: WeaponRow())], token,
+                    repeat: true, fieldName: "weapons");
+                doc.Arguments.Owned.Add(list.Key.Id);
+            }
         if (doc.Family == "pickup-placements")
         {
             var root = doc.Root;
@@ -65,8 +74,19 @@ public static partial class RecoilLanguage
             }
             if (doc.Family == "vehicle" && parent == "common_mode")
             {
-                if (key == "weapons") { Rows(WeaponRow()); continue; }
-                if (key == "camback") { Bind([Tuple("camera offset", XYZ()), Tuple("camera point 2", XYZ()), Tuple("camera point 3", XYZ())]); continue; }
+                if (key == "camback")
+                {
+                    Bind([
+                        Tuple("chase camera", A("chase lateral offset", "f", "Sideways offset relative to the camera heading."),
+                            A("chase height", "f", "Base camera height above the vehicle; runtime elevation and smoothing can adjust it."),
+                            A("chase distance", "f", "Base following distance; velocity and camera smoothing can adjust it.")),
+                        Tuple("camera vector 2", XYZ().Select(p => p with { Label = "camera vector 2 " + p.Label,
+                            Documentation = "Second stored camback vector. Its gameplay role has not been verified." }).ToArray()),
+                        Tuple("first-person offset", XYZ().Select(p => p with { Label = "first-person offset " + p.Label,
+                            Documentation = "Vehicle-local first-person camera offset, transformed by the vehicle's motion basis." }).ToArray())
+                    ]);
+                    continue;
+                }
             }
             if (doc.Family == "vehicle" && path.Length == 2 && parent != "common_mode" && key is "platform" or "collision")
             { Rows(XYZ()); continue; }

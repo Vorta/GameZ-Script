@@ -87,6 +87,7 @@ public static partial class RecoilLanguage
     }
     private static void Validate(LanguageDocument doc, CancellationToken token)
     {
+        if (doc.Family == "vehicle") ValidateVehicleWeapons(doc, token);
         foreach (var record in doc.Records)
         {
             token.ThrowIfCancellationRequested();

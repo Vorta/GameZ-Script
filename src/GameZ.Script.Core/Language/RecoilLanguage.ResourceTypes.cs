@@ -1,4 +1,5 @@
 using GameZ.Script.Core.Formats;
+using GameZ.Script.Core.Sources;
 
 namespace GameZ.Script.Core.Language;
 
@@ -121,6 +122,19 @@ public static partial class RecoilLanguage
         _ => 0
     };
 
+    private static void ValidateVehicleWeapons(LanguageDocument doc, CancellationToken token)
+    {
+        foreach (var list in VehicleWeaponRules.Lists(doc.Root!, token))
+        {
+            var record = new LanguageRecord("weapons", list.Key, list.Value, null);
+            // Preserve the existing first-nine type checks. The shared rule owns arity and value 10.
+            foreach (var row in record.Values.Where(n => n.Kind == ZrdKind.Array && n.Children.Count is 9 or 10))
+                CheckTuple(doc, record, row, "s i i i f f f i i x?");
+            foreach (var issue in VehicleWeaponRules.ValidateList(list.Vehicle, list.Value, token))
+                doc.Report(issue.Code, issue.Warning ? "warning" : "error", issue.Message, doc.Span(issue.Node));
+        }
+    }
+
     private static void ValidateResourceValues(LanguageDocument doc, LanguageRecord record)
     {
         string parent = record.Parent?.Key ?? "";
@@ -146,7 +160,6 @@ public static partial class RecoilLanguage
             if (parent == "common_mode")
             {
                 if (record.Key == "camback") Rows("f f f", 3);
-                if (record.Key == "weapons") Rows("s i i i f f f i i");
             }
             else if (Ancestors(record.Parent).Count() == 2 && record.Key is "platform" or "collision") Rows("f f f");
         }

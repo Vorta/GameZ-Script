@@ -1023,6 +1023,7 @@ public static partial class SourceBuilder
 
     private static Built BuildArchive(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
+        var warnings = new List<string>(plan.Notes);
         Dictionary<string, string> names = new(StringComparer.OrdinalIgnoreCase); List<ArchiveSources.Entry> entries = [];
         long retained = 8L + plan.Inputs.Count * ArchiveSources.RecordSize;
         long remainingInput = FormatRegistry.MaximumDocumentBytes;
@@ -1048,13 +1049,18 @@ public static partial class SourceBuilder
                 // Animation definitions are compiled into anim.zbd; the game never reads them from an archive.
                 if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     throw new InvalidDataException($"it holds animation definitions (ANIMATION_DEFINITIONS), which belong in a {Animation.AnimationDefinitionSet.Extension} file beside it; a project reconstructed before zStudio kept definitions in {Animation.AnimationDefinitionSet.Extension} files must be reconstructed again.");
+                VehicleWeaponRules.ValidateForCompilation(input, tree, token, message =>
+                {
+                    if (warnings.Count < 200) warnings.Add(input + ": " + message);
+                    else if (warnings.Count == 200) warnings.Add("Further resource warnings omitted.");
+                });
                 payload = ZrdWriter.Write(tree, token);
             }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{input}: {ex.Message}", ex); }
             FormatRegistry.ValidateDocumentSize(retained += payload.Length);
             entries.Add(new(name, field, payload));
         }
-        return new(ArchiveSources.Write(entries), entries.Count, plan.Notes);
+        return new(ArchiveSources.Write(entries), entries.Count, warnings);
     }
 
     internal static Built BuildScripts(string root, SourceOutputPlan plan, Snapshot snapshot, CancellationToken token,

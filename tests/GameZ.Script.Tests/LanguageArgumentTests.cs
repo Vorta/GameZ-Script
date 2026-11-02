@@ -9,6 +9,46 @@ public sealed class LanguageArgumentTests
     private static LanguageDocument Doc(string file, string text) => RecoilLanguage.Analyze(file, text);
     private static IReadOnlyList<LanguageInlayHint> Hints(LanguageDocument doc) => RecoilLanguage.InlayHints(doc, new(0, doc.Text.Length)).Items;
 
+    [Theory]
+    [InlineData("vehicle.zrd")]
+    [InlineData("vehicle_easy.zrd")]
+    [InlineData("vehicle_hard.zrd")]
+    public void VehicleCameraAndMultilineWeaponRowsHaveMeaningfulLabels(string file)
+    {
+        const string camera = "camback ((1.0 2.0 3.0) (4.0 5.0 6.0) (7.0 8.0 9.0) (99.0 99.0 99.0))";
+        const string weapons = "weapons ((wep_2.0\n1\n0\n3\n1.2\n5.0\n5.0\n1\n1) (wep_1.0 1 1 10 0.5 2.0 20.0 0 2))";
+        string text = "(bft (common_mode (" + camera + " " + weapons + ")) other (common_mode (" + camera + ")))";
+        var doc = Doc(file, text);
+        var hints = Hints(doc);
+        Assert.Equal(36, hints.Count); // Two cameras, two weapon rows; the excess camera vector is ignored.
+        Assert.Equal(new[] { "chase lateral offset:", "chase height:", "chase distance:",
+            "camera vector 2 x:", "camera vector 2 y:", "camera vector 2 z:",
+            "first-person offset x:", "first-person offset y:", "first-person offset z:" }, hints.Take(9).Select(h => h.Label));
+        Assert.Contains("not been verified", hints[3].Documentation);
+        Assert.Contains("camera heading", hints[0].Documentation);
+        Assert.Contains("Vehicle-local", hints[6].Documentation);
+        Assert.Equal(2, hints.Count(h => h.Label == "initial hardpoint state:"));
+        Assert.DoesNotContain(hints, h => text[h.Span.Start..h.Span.End] == "99.0");
+        int at = hints[7].Span.Start;
+        Assert.Contains("Vehicle-local", RecoilLanguage.Hover(doc, at)!.Markdown);
+        Assert.Equal("first-person offset y", RecoilLanguage.SignatureHelp(doc, at)!.Parameters[1].Label);
+        var viewport = RecoilLanguage.InlayHints(doc, new(at, hints[8].Span.End - at), TestContext.Current.CancellationToken);
+        Assert.Equal(2, viewport.Items.Count);
+        Assert.Equal(text, doc.Text);
+    }
+
+    [Theory]
+    [InlineData("(bft (common_mode (camback ((1.0 2.0 ", "chase lateral offset:", 2)]
+    [InlineData("(bft (common_mode (camback ((1.0 2.0 3.0) (4.0 ", "camera vector 2 x:", 4)]
+    [InlineData("(bft (common_mode (weapons ((wep_2.0\n1\n0\n3\n", "starting ammo:", 4)]
+    public void UnfinishedVehicleTuplesKeepHints(string text, string expected, int count)
+    {
+        var doc = Doc("vehicle.zrd", text);
+        Assert.Contains(doc.Diagnostics, d => d.Code == "RECOIL_SYNTAX");
+        Assert.Equal(count, Hints(doc).Count);
+        Assert.Contains(Hints(doc), h => h.Label == expected);
+    }
+
     [Fact]
     public void WeaponRowsLabelEveryOperandWithoutChangingSource()
     {

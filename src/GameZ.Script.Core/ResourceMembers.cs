@@ -27,6 +27,11 @@ public sealed class ResourceMembers
         var standalone = IsArchive ? null : document.Assets.SingleOrDefault()?.Content as ZrdNode
             ?? (text ? Sources.ZrdText.Parse(document.Bytes.Span, token) : ZrdDecoder.Read(document.Bytes, token));
         // A source text .zrd is shown as the compiled member the game reads.
+        if (text)
+        {
+            try { Sources.VehicleWeaponRules.ValidateForCompilation(document.Path, standalone!, token); }
+            catch (InvalidDataException ex) { throw new InvalidDataException($"{document.Path}: {ex.Message}", ex); }
+        }
         ReadOnlyMemory<byte> compiled = text ? ZrdWriter.Write(standalone!, token) : default;
         List<ResourceMember> members = [];
         foreach (var a in document.Assets)
