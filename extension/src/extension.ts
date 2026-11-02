@@ -10,7 +10,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(output);
     const encodingDiagnostics = vscode.languages.createDiagnosticCollection('gamez-script-encoding');
     const checkEncoding = (document: vscode.TextDocument): void => {
-        if (document.languageId !== 'gamez-script') return;
+        if (!['gamez-script', 'gamez-gamegen'].includes(document.languageId)) return;
         const text = document.getText();
         const at = /[^\x00-\x7f]/.exec(text)?.index;
         const encoding = document.encoding.toLowerCase();
@@ -28,9 +28,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const start = async (): Promise<void> => {
         const server: ServerOptions = { command: context.asAbsolutePath(path.join('server', 'GameZ.Script.LanguageServer.exe')), options: { cwd: context.extensionPath } };
         watcher?.dispose();
-        watcher = vscode.workspace.createFileSystemWatcher('**/*.{zad,zrd,zan,gs,gw,gltf,bin,json}');
+        watcher = vscode.workspace.createFileSystemWatcher('**/*.{zad,zrd,zan,gs,gw,gltf,glb,bin,json,png,wav}');
         const options: LanguageClientOptions = {
-            documentSelector: [{ scheme: 'file', language: 'gamez-script' }],
+            documentSelector: [{ scheme: 'file', language: 'gamez-script' }, { scheme: 'file', language: 'gamez-gamegen' }],
             initializationOptions: { trusted: vscode.workspace.isTrusted },
             synchronize: { fileEvents: watcher }, outputChannel: output
         };
@@ -44,7 +44,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(vscode.commands.registerCommand('gamez.restartLanguageServer', restart));
     context.subscriptions.push(vscode.commands.registerCommand('gamez.validateProject', async () => {
         const editor = vscode.window.activeTextEditor;
-        if (!editor || editor.document.languageId !== 'gamez-script') { void vscode.window.showInformationMessage('Open a GameZ Script source file first.'); return; }
+        if (!editor || !['gamez-script', 'gamez-gamegen'].includes(editor.document.languageId)) { void vscode.window.showInformationMessage('Open a GameZ Script source file first.'); return; }
         if (!vscode.workspace.isTrusted) { void vscode.window.showInformationMessage('Trust this workspace to validate the source project.'); return; }
         try {
             await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'GameZ Script: validating project', cancellable: true }, async (_, token) => {

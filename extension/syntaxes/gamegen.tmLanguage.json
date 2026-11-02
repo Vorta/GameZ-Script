@@ -1,0 +1,13 @@
+{
+  "name": "GameGen Script",
+  "scopeName": "source.gamez.gamegen",
+  "patterns": [
+    { "name": "comment.line.number-sign.gamegen", "begin": "#", "end": "$" },
+    { "name": "variable.other.macro.gamegen", "match": "%[^%#\\r\\n]*%" },
+    { "name": "keyword.control.gamegen", "match": "^\\s*(?:ifdef[^,\\s#]*|ifndef[^,\\s#]*|endif[^,\\s#]*|source[^,\\s#]*|set[^,\\s#]*|Quit)(?=[,\\s#]|$)" },
+    { "name": "support.function.gamegen", "match": "^\\s*[^,\\s#]+" },
+    { "name": "constant.numeric.gamegen", "match": "(?<![^,\\s])[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[Ee][+-]?[0-9]+)?(?=[,\\s#]|$)" },
+    { "name": "constant.language.gamegen", "match": "(?<![^,\\s])(?:on|off|true|false|TRUE|FALSE)(?=[,\\s#]|$)" },
+    { "name": "punctuation.separator.gamegen", "match": "," }
+  ]
+}

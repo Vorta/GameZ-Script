@@ -11,8 +11,9 @@ public sealed class GameZLanguageServer : IDisposable
     private sealed record Buffer(string Uri, string Path, string Text, int Version);
     private readonly Lock gate = new();
     private readonly Dictionary<string, Buffer> buffers = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, (long Generation, LanguageProject Project)> projects = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (long Generation, LanguageProject Project, bool Missions)> projects = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim analysisGate = new(1);
+    private readonly SemaphoreSlim missionGate = new(1);
     private readonly List<string> folders = [];
     private readonly HashSet<string> published = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource pending = new();
@@ -34,14 +35,14 @@ public sealed class GameZLanguageServer : IDisposable
             capabilities = new
             {
                 positionEncoding = "utf-16", textDocumentSync = new { openClose = true, change = 1, save = new { includeText = false } },
-                completionProvider = new { resolveProvider = false, triggerCharacters = new[] { "(", " " } },
+                completionProvider = new { resolveProvider = false, triggerCharacters = new[] { "(", " ", ",", "%", "\\", "/" } },
                 hoverProvider = true, definitionProvider = true, documentSymbolProvider = true,
                 inlayHintProvider = new { resolveProvider = false },
-                signatureHelpProvider = new { triggerCharacters = new[] { "(", " " }, retriggerCharacters = new[] { " " } },
+                signatureHelpProvider = new { triggerCharacters = new[] { "(", " ", "," }, retriggerCharacters = new[] { " ", "," } },
                 executeCommandProvider = new { commands = new[] { "gamez.server.validateProject" } },
                 workspace = new { workspaceFolders = new { supported = true, changeNotifications = true } }
             },
-            serverInfo = new { name = "GameZ Script", version = "1.1.0" }
+            serverInfo = new { name = "GameZ Script", version = "1.2.0" }
         };
     }
     [JsonRpcMethod("initialized", UseSingleObjectParameterDeserialization = true)] public void Initialized(JsonObject _) { }
@@ -121,7 +122,7 @@ public sealed class GameZLanguageServer : IDisposable
             }
             foreach (string root in opened.Select(b => Root(b.Path)).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var project = await Project(root, false, revision, token);
+                var project = await Project(root, false, revision, token, true);
                 foreach (var buffer in opened.Where(b => Root(b.Path)?.Equals(root, StringComparison.OrdinalIgnoreCase) == true))
                     if (project.Documents.TryGetValue(SourceProject.Relative(root, buffer.Path), out var doc)) await Publish(buffer, doc, revision, token);
             }
@@ -167,22 +168,23 @@ public sealed class GameZLanguageServer : IDisposable
         }
         if (notification != null) await notification;
     }
-    private async Task<LanguageProject> Project(string root, bool deep, long revision, CancellationToken token)
+    private async Task<LanguageProject> Project(string root, bool deep, long revision, CancellationToken token, bool missions = false)
     {
-        await analysisGate.WaitAsync(token);
+        var selectedGate = missions || deep ? missionGate : analysisGate;
+        await selectedGate.WaitAsync(token);
         try
         {
             Dictionary<string, string> overlay;
             lock (gate)
             {
-                if (!deep && projects.TryGetValue(root, out var cached) && cached.Generation == revision) return cached.Project;
+                if (!deep && projects.TryGetValue(root, out var cached) && cached.Generation == revision && (cached.Missions || !missions)) return cached.Project;
                 overlay = buffers.Values.Where(b => Under(b.Path, root)).ToDictionary(b => SourceProject.Relative(root, b.Path), b => b.Text, StringComparer.OrdinalIgnoreCase);
             }
-            var project = await Task.Run(() => LanguageProject.Analyze(root, overlay, deep, token), token);
-            lock (gate) if (generation == revision) projects[root] = (revision, project);
+            var project = await Task.Run(() => LanguageProject.Analyze(root, overlay, deep, token, missionAnalysis: missions || deep), token);
+            lock (gate) if (generation == revision && (!projects.TryGetValue(root, out var ready) || ready.Generation != revision || !ready.Missions || missions || deep)) projects[root] = (revision, project, missions || deep);
             return project;
         }
-        finally { analysisGate.Release(); }
+        finally { selectedGate.Release(); }
     }
     private string? Root(string path)
     {
@@ -196,7 +198,7 @@ public sealed class GameZLanguageServer : IDisposable
             return null;
         }
     }
-    private async Task<(LanguageDocument Document, LanguageProject? Project, int Offset)> Document(JsonObject args, CancellationToken token, bool contextualAnalysis = true)
+    private async Task<(LanguageDocument Document, LanguageProject? Project, int Offset)> Document(JsonObject args, CancellationToken token, bool contextualAnalysis = true, bool cacheOnly = false, bool fullContext = false)
     {
         string uri = Canonical(args["textDocument"]!["uri"]!.GetValue<string>());
         Buffer buffer; long revision; CancellationToken contextToken;
@@ -207,7 +209,12 @@ public sealed class GameZLanguageServer : IDisposable
         string? root = contextualAnalysis ? Root(buffer.Path) : null;
         if (root != null)
         {
-            try { project = await Project(root, false, revision, token); }
+            try
+            {
+                // Script assistance stays responsive while contextual analysis runs in the background.
+                if (cacheOnly && pathIsScript(buffer.Path)) { lock (gate) if (projects.TryGetValue(root, out var cached) && cached.Generation == revision) project = cached.Project; }
+                else project = await Project(root, false, revision, token, fullContext);
+            }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { await Console.Error.WriteLineAsync(ex.Message); }
         }
         var doc = project != null && project.Documents.TryGetValue(SourceProject.Relative(root!, buffer.Path), out var contextual) ? contextual : RecoilLanguage.Analyze(buffer.Path, buffer.Text, token);
@@ -215,10 +222,11 @@ public sealed class GameZLanguageServer : IDisposable
         lock (gate) if (generation != revision) throw new OperationCanceledException("Source buffer changed during language request.");
         return (doc, project, Offset(buffer.Text, args["position"]));
     }
+    private static bool pathIsScript(string path) => path.EndsWith(".gs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".gw", StringComparison.OrdinalIgnoreCase);
     [JsonRpcMethod("textDocument/completion", UseSingleObjectParameterDeserialization = true)]
     public async Task<object> Completion(JsonObject args, CancellationToken token)
     {
-        var (doc, project, offset) = await Document(args, token);
+        var (doc, project, offset) = await Document(args, token, cacheOnly: true);
         var items = project?.Complete(doc.Path, offset) ?? RecoilLanguage.Complete(doc, offset);
         bool Quoted(LanguageCompletion item) => item.ReplacementSpan is { Length: > 0 } span && doc.Text[span.Start] == '"';
         // Core already filters decoded prefixes. Keep the client's filter compatible with source quotes/escapes,
@@ -279,9 +287,9 @@ public sealed class GameZLanguageServer : IDisposable
     [JsonRpcMethod("textDocument/definition", UseSingleObjectParameterDeserialization = true)]
     public async Task<object> Definition(JsonObject args, CancellationToken token)
     {
-        var (doc, project, offset) = await Document(args, token);
+        var (doc, project, offset) = await Document(args, token, fullContext: true);
         if (project == null) return Array.Empty<object>();
-        return project.Definition(doc.Path, offset).Select(location => new
+        return project.Definition(doc.Path, offset).DistinctBy(location => (location.Path.ToLowerInvariant(), location.Span)).Select(location => new
         {
             uri = new Uri(SourceProject.Resolve(project.Root, location.Path)).AbsoluteUri,
             range = Range(project.Documents.TryGetValue(location.Path, out var target) ? target.Text : "", location.Span)
@@ -315,7 +323,8 @@ public sealed class GameZLanguageServer : IDisposable
     private static object[] Diagnostics(LanguageDocument doc) => doc.Diagnostics.Select(d => (object)new
     {
         range = Range(doc.Text, d.Span), severity = d.Severity == "error" ? 1 : d.Severity == "warning" ? 2 : 3, code = d.Code, source = "GameZ Script",
-        message = (d.Mission == null ? "" : d.Mission + ": ") + d.Message
+        message = (d.Mission == null ? "" : d.Mission + ": ") + d.Message,
+        relatedInformation = d.Related?.Select(r => new { location = new { uri = new Uri(r.Path).AbsoluteUri, range = Range(r.Text, r.Span) }, message = r.Message }).ToArray()
     }).ToArray();
     public static object Range(string text, TextSpan span) => new { start = Position(text, span.Start), end = Position(text, span.End) };
     private static object Position(string text, int offset)

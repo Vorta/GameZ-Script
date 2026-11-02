@@ -70,6 +70,7 @@ public static partial class RecoilLanguage
 
     public static LanguageSignature? SignatureHelp(LanguageDocument document, int offset)
     {
+        if (document.Script != null) return GameGenLanguage.Signature(document, offset);
         if (InComment(document, offset)) return null;
         if (ArgumentContext(document, offset) is not { } context) return null;
         var (container, index) = context;

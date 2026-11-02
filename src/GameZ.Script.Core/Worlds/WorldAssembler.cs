@@ -53,6 +53,8 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
     public Dictionary<WorldNode, WorldNodeProvenance> Provenance { get; } = new(ReferenceEqualityComparer.Instance);
     /// <summary>How many times each instruction (script, line) ran; an instruction that ran more than once changed several things. Scripts compare without case, as the file system finds them.</summary>
     public Dictionary<(string Script, int Line), int> Executions { get; } = new(ScriptLineComparer.Instance);
+    internal Dictionary<(string Script, int Line), List<WorldNode>> LookupTargets { get; } = new(ScriptLineComparer.Instance);
+    internal Dictionary<(string Script, int Line), string> ReceiverIssues { get; } = new(ScriptLineComparer.Instance);
     /// <summary>The GameZWriteZBDFile that wrote the world: lines added before the world is written go right before it.</summary>
     public SourceInstruction? WriteInstruction { get; private set; }
     private sealed class ScriptLineComparer : IEqualityComparer<(string Script, int Line)>
@@ -158,7 +160,18 @@ public sealed partial class WorldAssembler(IProjectFiles files, CancellationToke
             instruction = new(relative, line.Number, command, raw, args);
             Executions[(relative, line.Number)] = Executions.GetValueOrDefault((relative, line.Number)) + 1;
             var target = current;
+            WorldNodeClass? expected = command.StartsWith("World", StringComparison.Ordinal) ? WorldNodeClass.World
+                : command.StartsWith("CameraSet", StringComparison.Ordinal) && command is not ("CameraSetDynamicLOD" or "CameraSetObjectHSETest") ? WorldNodeClass.Camera
+                : command.StartsWith("LightSet", StringComparison.Ordinal) && command != "LightSetActive" ? WorldNodeClass.Light
+                : command is "Object3DTranslate" or "Object3DRotate" or "Object3DScale" ? WorldNodeClass.Object3D : null;
+            if (expected != null && current?.Class != expected)
+                ReceiverIssues[(relative, line.Number)] = $"{command} needs a current {expected} node; this receiver is {(current == null ? "missing" : current.Class.ToString())}.";
             bool unapplied = Run(command, args, relative);
+            if (command is "FindNode" or "FindSubNode" && current != null)
+            {
+                if (!LookupTargets.TryGetValue((relative, line.Number), out var found)) LookupTargets[(relative, line.Number)] = found = [];
+                if (found.Count < 200 && !found.Contains(current)) found.Add(current);
+            }
             if (CreateCommands.Contains(command) && current != null && current != target) Origin(current).Created = instruction;
             else if (target != null && (NodeCommands.Contains(command) || CurrentCommands.Contains(command) || unapplied))
             {

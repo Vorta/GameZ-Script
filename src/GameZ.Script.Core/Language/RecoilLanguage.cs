@@ -11,6 +11,7 @@ public static partial class RecoilLanguage
     public static LanguageDocument Analyze(string path, string text, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (GameGenLanguage.IsScript(path)) return GameGenLanguage.Analyze(path, text, token);
         var result = new LanguageDocument(path, text);
         if (text.Length > SourceProject.MaximumSourceTextBytes)
         { result.Report("RECOIL_LIMIT", "information", "Document exceeds the 16 MiB analysis limit.", new(0, 0)); return result; }
@@ -140,6 +141,7 @@ public static partial class RecoilLanguage
 
     public static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument document, int offset)
     {
+        if (document.Script != null) return GameGenLanguage.Complete(document, offset);
         offset = Math.Clamp(offset, 0, document.Text.Length);
         if (InComment(document, offset)) return [];
         var replacement = CompletionSpan(document, offset);
@@ -192,6 +194,7 @@ public static partial class RecoilLanguage
 
     public static LanguageHover? Hover(LanguageDocument document, int offset)
     {
+        if (document.Script != null) return GameGenLanguage.Hover(document, offset);
         var item = document.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
         if (item == null) return null;
         if (document.Arguments.Hints.TryGetValue(item.Span.Start, out var hint)) return new(hint.Documentation, item.Span);
@@ -225,6 +228,7 @@ public static partial class RecoilLanguage
     // Delimiters and scalar tokens come from the strict parser even when a final ')' is still being typed.
     internal static bool InComment(LanguageDocument doc, int offset)
     {
+        if (doc.Script != null) return GameGenLanguage.InComment(doc, offset);
         offset = Math.Clamp(offset, 0, doc.Text.Length);
         int start = 0;
         foreach (var token in doc.Tokens)

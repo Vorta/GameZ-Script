@@ -3,7 +3,9 @@ using GameZ.Script.Core.Sources;
 
 namespace GameZ.Script.Core.Language;
 
-public sealed record LanguageDiagnostic(string Code, string Severity, string Message, TextSpan Span, string? Mission = null);
+public sealed record LanguageRelatedInformation(string Path, TextSpan Span, string Message, string Text);
+public sealed record LanguageDiagnostic(string Code, string Severity, string Message, TextSpan Span, string? Mission = null,
+    IReadOnlyList<LanguageRelatedInformation>? Related = null);
 public sealed record LanguageToken(TextSpan Span, string Text, string Kind);
 public sealed record LanguageSymbol(string Name, string Kind, TextSpan Span, TextSpan Selection, IReadOnlyList<LanguageSymbol> Children);
 public sealed record LanguageCompletion(string Label, string Detail, string InsertText, string Kind = "keyword", string? Documentation = null, TextSpan? ReplacementSpan = null, bool IsSnippet = false);
@@ -31,6 +33,7 @@ public sealed class LanguageDocument
     internal List<LanguageToken> tokens = [];
     internal Dictionary<Guid, TextSpan> spans = [];
     internal ZrdNode? Root;
+    internal GameGenScriptSyntax? Script;
     internal string? CompletionText;
     internal List<LanguageRecord> Records = [];
     internal List<TextSpan> PositionalValues = [];

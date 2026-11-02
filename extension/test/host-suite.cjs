@@ -128,5 +128,38 @@ exports.run = async function() {
     await new Promise(resolve=>setTimeout(resolve,400));
     assert(vscode.languages.getDiagnostics(uri).some(d=>d.code==='GAMEZ_FILE_ENCODING'),name+' encoding mismatch');
   }
+  // Script file associations and native language providers, exercised without changing user files.
+  const scriptUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'gamegen/standalone.gw');
+  await vscode.workspace.fs.writeFile(scriptUri,Buffer.from('Object3DTranslate 1.0 nope 3.0 # script'));
+  const scriptDoc = await vscode.workspace.openTextDocument(scriptUri);
+  assert.equal(scriptDoc.languageId,'gamez-gamegen');
+  const scriptHints = await vscode.commands.executeCommand('vscode.executeInlayHintProvider',scriptUri,new vscode.Range(0,0,0,34));
+  assert(scriptHints.some(h=>h.label==='x:'),'Native script inlay hints');
+  const scriptHover = await vscode.commands.executeCommand('vscode.executeHoverProvider',scriptUri,new vscode.Position(0,2));
+  assert(scriptHover.some(h=>h.contents.some(c=>c.value?.includes('Object3DTranslate'))));
+  await vscode.workspace.fs.delete(scriptUri);
+  await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+  const buildUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'gamegen/m1.gs');
+  const supportUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'gamegen/native.gw');
+  const aivUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/aiv.zrd');
+  const buildText='NewWorld world\nGameGenSetWorld\nWorldOrigin 0 512\nWorldExtents 512 -512\nWorldPartition 256 -256\nsource native.gw\nGameZWriteZBDFile ../m1/gamez.zbd\nQuit';
+  await vscode.workspace.fs.writeFile(supportUri,Buffer.from('# template absent'));
+  await vscode.workspace.fs.writeFile(buildUri,Buffer.from(buildText));
+  await vscode.workspace.fs.writeFile(aivUri,Buffer.from('(tank_01 (0 (1.0 2.0 3.0) 80.0))'));
+  const buildDoc=await vscode.workspace.openTextDocument(buildUri);
+  assert.equal(buildDoc.languageId,'gamez-gamegen','GS file association');
+  const aivDoc=await vscode.workspace.openTextDocument(aivUri);
+  await vscode.window.showTextDocument(aivDoc);
+  const missingTemplates=()=>vscode.languages.getDiagnostics(aivUri).filter(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED');
+  for(let i=0;i<100&&missingTemplates().length===0;i++) await new Promise(r=>setTimeout(r,100));
+  assert.equal(missingTemplates().length,1,'Native live AIV template error');
+  assert.equal(missingTemplates()[0].severity,vscode.DiagnosticSeverity.Error);
+  assert.equal(aivDoc.getText(missingTemplates()[0].range),'tank_01','Exact red underline span');
+  const supportDoc=await vscode.workspace.openTextDocument(supportUri), supportEditor=await vscode.window.showTextDocument(supportDoc);
+  await supportEditor.edit(edit=>edit.replace(new vscode.Range(supportDoc.positionAt(0),supportDoc.positionAt(supportDoc.getText().length)),'NewObject3D tank\nQuit'));
+  for(let i=0;i<100&&missingTemplates().length>0;i++) await new Promise(r=>setTimeout(r,100));
+  assert.equal(missingTemplates().length,0,'Unsaved support load clears native AIV error');
+  assert.equal(Buffer.from(await vscode.workspace.fs.readFile(supportUri)).toString(),'# template absent','Analysis leaves support source on disk unchanged');
+  await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
   console.log('PASS GameZ Script real VS Code extension-host language, outline, hover, completion, snippets, inlay hints, signature help and encoding diagnostics');
 };

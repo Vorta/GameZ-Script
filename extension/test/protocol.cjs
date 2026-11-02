@@ -97,6 +97,32 @@ const rpc = require('vscode-jsonrpc/node');
     assert.equal(updatedHints[7].label,'unused:');
     assert(!fs.existsSync(path.join(temporary,'vehicle.zrd')), 'Argument analysis never saves a buffer');
     for (const closeUri of [vehicleUri,netUri]) await connection.sendNotification('textDocument/didClose',{textDocument:{uri:closeUri}});
+    const buildPath = path.join(temporary,'gamegen/m1.gs'), supportPath = path.join(temporary,'gamegen/load.gw'), aivPath = path.join(temporary,'data/m1/zrdr/aiv.zrd');
+    const build = 'NewWorld world\nGameGenSetWorld\nWorldOrigin 0 512\nWorldExtents 512 -512\nWorldPartition 256 -256\nsource load.gw\nGameZWriteZBDFile ../m1/gamez.zbd\nQuit\n';
+    const aiv = '(tank_01 (0 (1.0 2.0 3.0) 80.0))';
+    fs.writeFileSync(buildPath, build); fs.writeFileSync(supportPath, '# initially absent'); fs.writeFileSync(aivPath, aiv);
+    const buildUri=vscodeUri(buildPath), supportUri=vscodeUri(supportPath), aivUri=vscodeUri(aivPath);
+    for (const [u,text,languageId] of [[buildUri,build,'gamez-gamegen'],[supportUri,'# initially absent','gamez-gamegen'],[aivUri,aiv,'gamez-script']])
+      await connection.sendNotification('textDocument/didOpen',{textDocument:{uri:u,text,languageId,version:1}});
+    const gh = await connection.sendRequest('textDocument/hover',{textDocument:{uri:buildUri},position:{line:0,character:2}});
+    assert(gh.contents.value.includes('NewWorld'));
+    const scriptDefs = await connection.sendRequest('textDocument/definition',{textDocument:{uri:buildUri},position:{line:5,character:9}});
+    assert.equal(scriptDefs.length,trusted?1:0);
+    const aivLatest = () => notices.filter(n=>decodeURIComponent(n.uri).toLowerCase()===decodeURIComponent(aivUri).toLowerCase()).at(-1)?.diagnostics ?? [];
+    const delay=ms=>new Promise(r=>setTimeout(r,ms));
+    if(trusted) {
+      for(let i=0;i<100&&!aivLatest().some(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED');i++) await delay(100);
+      const missing=aivLatest().find(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED');
+      assert(missing,'Live missing template diagnostic'); assert.equal(missing.severity,1);
+      assert.equal(aiv.slice(missing.range.start.character,missing.range.end.character),'tank_01');
+      assert(missing.relatedInformation[0].location.uri.includes('m1.gs'));
+      await connection.sendNotification('textDocument/didChange',{textDocument:{uri:supportUri,version:2},contentChanges:[{text:'NewObject3D tank\nQuit'}]});
+      for(let i=0;i<100&&aivLatest().some(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED');i++) await delay(100);
+      assert(!aivLatest().some(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED'),'Unsaved support edit clears AIV error');
+      assert.equal(fs.readFileSync(supportPath,'utf8'),'# initially absent','Analysis never saves script');
+    } else {
+      await delay(800); assert(!aivLatest().some(d=>d.code==='GAMEZ_AIV_TEMPLATE_NOT_LOADED'),'Restricted Mode stays local');
+    }
     await connection.sendRequest('shutdown'); await connection.sendNotification('exit');
     console.log('PASS GameZ Script LSP '+(trusted?'trusted':'restricted')+' initialization, live buffers, hover, completion, symbols, diagnostics, inlay hints and signature help');
   } finally { clearTimeout(deadline); connection.dispose(); child.kill(); fs.rmSync(temporary,{recursive:true,force:true}); }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 2026-11-02
+
+- Add a dedicated GameGen Script mode for `.gs`/`.gw`, command recognition, operand hover, completion, signatures, inlay hints, outline, and project navigation.
+- Diagnose unloaded AIV templates at the exact vehicle name, with mission context and related source locations; update from unsaved support-script changes.
+- Trace includes, macros, conditions, ordered search paths, build capture, and supported runtime node mutations. Check related resource/model/texture dependencies and receiver classes.
+- Keep lightweight assistance separate from bounded mission jobs; cache immutable worlds with input and missing-path revalidation. Report unverified/unsupported semantics without speculative errors.
+- Preserve standalone packaging, existing language/extension identifiers, Restricted Mode, and read-only analysis. Refresh the SDK-selected ILLink lock entry for the current .NET patch.
 ## 1.1.0 — 2026-10-24
 
 - Add context-specific names for roots, sequences, animations, sounds, effects, lights, cameras, target nodes and weapon definitions; distinguish attachment, position-reference and recipient nodes. Hide labels that repeat field names while retaining hover and signature help.

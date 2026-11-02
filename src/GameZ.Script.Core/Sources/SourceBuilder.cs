@@ -513,6 +513,8 @@ public static partial class SourceBuilder
         /// <summary>A mission world assembled once per run; its texture packs hold the textures it uses.</summary>
         internal sealed record AssembledWorld(GameZWorld World, IReadOnlyList<string> Warnings, IReadOnlyDictionary<string, string> TextureFiles, IReadOnlyDictionary<string, int> TextureAddressing, IReadOnlyList<WorldNode> LoadedRoots)
         {
+            internal IReadOnlyDictionary<(string Script, int Line), List<WorldNode>> LookupTargets { get; init; } = new Dictionary<(string, int), List<WorldNode>>();
+            internal IReadOnlyDictionary<(string Script, int Line), string> ReceiverIssues { get; init; } = new Dictionary<(string, int), string>();
             public IReadOnlyDictionary<WorldNode, WorldNodeProvenance> Provenance { get; init; } = new Dictionary<WorldNode, WorldNodeProvenance>();
             public SourceAuthoredHierarchy AuthoredHierarchy { get; init; } = SourceAuthoredHierarchy.Empty;
             public IReadOnlyDictionary<(string Script, int Line), int> Executions { get; init; } = new Dictionary<(string, int), int>();
@@ -537,7 +539,7 @@ public static partial class SourceBuilder
                         + assembler.Provenance.Values.Sum(p => 128L * p.Applied.Count) + assembler.TextureCycles.Sum(c => 64L + 16L * c.Frames.Count));
                     cached = (new(world, assembler.Warnings, new Dictionary<string, string>(assembler.TextureFiles, StringComparer.OrdinalIgnoreCase),
                         new Dictionary<string, int>(assembler.TextureAddressing, StringComparer.OrdinalIgnoreCase), [.. assembler.LoadedRoots])
-                    { Provenance = assembler.Provenance, AuthoredHierarchy = assembler.AuthoredHierarchy(GameZWriter.NodeSlots(world, token)),
+                    { ReceiverIssues = assembler.ReceiverIssues, LookupTargets = assembler.LookupTargets, Provenance = assembler.Provenance, AuthoredHierarchy = assembler.AuthoredHierarchy(GameZWriter.NodeSlots(world, token)),
                         Executions = assembler.Executions, WriteInstruction = assembler.WriteInstruction, TextureCycles = assembler.TextureCycles, WorldChildOrder = assembler.WorldChildOrder, TerrainModelInputs = assembler.TerrainModelInputs }, null);
                 }
                 catch (Exception ex) when (IsBuildFailure(ex)) { cached = (null, ex); }

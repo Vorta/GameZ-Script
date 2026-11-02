@@ -7,7 +7,7 @@ using GameZ.Script.Core.Worlds;
 namespace GameZ.Script.Core.Language;
 
 /// <summary>A bounded, read-only project analysis. Unsaved inputs overlay disk without publishing or exporting.</summary>
-public sealed class LanguageProject
+public sealed partial class LanguageProject
 {
     public const long MaximumTextBytes = 64L * 1024 * 1024;
     private const int MaximumReferenceNames = 50_000;
@@ -19,7 +19,7 @@ public sealed class LanguageProject
     private LanguageProject(string root) => Root = root;
 
     public static LanguageProject Analyze(string root, IReadOnlyDictionary<string, string>? overlays = null, bool deep = false, CancellationToken token = default,
-        IReadOnlyDictionary<string, byte[]>? sourceOverlay = null)
+        IReadOnlyDictionary<string, byte[]>? sourceOverlay = null, bool missionAnalysis = true)
     {
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("Open a RECOIL source project containing data/ and gamegen/.");
         root = Path.GetFullPath(root);
@@ -38,7 +38,8 @@ public sealed class LanguageProject
                 else pending[path] = [];
             }
         var snapshot = new SourceBuilder.Snapshot(root, pending, inventoryToken: token);
-        var inputs = SourceProject.Files(root, "data", IsLanguageFile, pending.Keys.ToArray(), token);
+        var inputs = SourceProject.Files(root, "data", IsLanguageFile, pending.Keys.ToArray(), token)
+            .Concat(SourceProject.Files(root, "gamegen", GameGenLanguage.IsScript, pending.Keys.ToArray(), token)).Distinct(StringComparer.OrdinalIgnoreCase);
         long tokens = 0;
         foreach (string path in inputs)
         {
@@ -47,9 +48,11 @@ public sealed class LanguageProject
             if (overlays?.TryGetValue(path, out var buffer) == true) text = buffer;
             else
             {
-                var raw = snapshot.Read(path, token, ProjectReadLimits.Resource(Math.Min(SourceProject.MaximumSourceTextBytes, MaximumTextBytes - bytes)));
+                var raw = snapshot.Read(path, token, GameGenLanguage.IsScript(path)
+                    ? ProjectReadLimits.Text(Math.Min(SourceProject.MaximumSourceTextBytes, MaximumTextBytes - bytes))
+                    : ProjectReadLimits.Resource(Math.Min(SourceProject.MaximumSourceTextBytes, MaximumTextBytes - bytes)));
                 bytes += raw.Length;
-                if (!ZrdText.LooksLikeText(raw)) continue;
+                if (!GameGenLanguage.IsScript(path) && !ZrdText.LooksLikeText(raw)) continue;
                 text = Encoding.Latin1.GetString(raw);
             }
             var doc = RecoilLanguage.Analyze(path, text, token);
@@ -57,15 +60,21 @@ public sealed class LanguageProject
             if (tokens > 2_000_000) throw new InvalidDataException("Project analysis exceeds its two-million-token limit.");
             result.documents.Add(path, doc);
         }
-        result.Resolve(snapshot, deep, token);
+        result.Resolve(snapshot, deep, token, missionAnalysis);
         snapshot.CheckUnchanged(token);
         return result;
     }
-    public static bool IsLanguageFile(string path) => path.EndsWith(".zad", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
+    public static bool IsLanguageFile(string path) => GameGenLanguage.IsScript(path) || path.EndsWith(".zad", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".zrd", StringComparison.OrdinalIgnoreCase);
 
     public IReadOnlyList<LanguageLocation> Definition(string path, int offset)
     {
         if (!documents.TryGetValue(path, out var doc)) return [];
+        if (doc.Script != null)
+        {
+            var key = scriptReferenceLengths.Keys.Where(k => k.Path.Equals(path, StringComparison.OrdinalIgnoreCase) && k.Start <= offset && offset < k.Start + scriptReferenceLengths[k])
+                .OrderByDescending(k => k.Start).FirstOrDefault();
+            if (key.Path != null) return definitions[key].Take(RecoilLanguage.MaximumResults).ToArray();
+        }
         var item = doc.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
         if (item == null) return [];
         return definitions.GetValueOrDefault((doc.Path, item.Span.Start))?.Distinct().Take(RecoilLanguage.MaximumResults).ToArray() ?? [];
@@ -73,6 +82,7 @@ public sealed class LanguageProject
     public IReadOnlyList<LanguageCompletion> Complete(string path, int offset)
     {
         if (!documents.TryGetValue(path, out var doc)) return [];
+        if (doc.Script != null) return CompleteGameGen(doc, offset);
         offset = Math.Clamp(offset, 0, doc.Text.Length);
         if (RecoilLanguage.InComment(doc, offset)) return [];
         var record = doc.Records.Where(r => r.Value != null && doc.Span(r.Value).Start <= offset &&
@@ -89,8 +99,9 @@ public sealed class LanguageProject
         return RecoilLanguage.Complete(doc, offset);
     }
 
-    private void Resolve(SourceBuilder.Snapshot snapshot, bool deep, CancellationToken token)
+    private void Resolve(SourceBuilder.Snapshot snapshot, bool deep, CancellationToken token, bool missionAnalysis)
     {
+        if (missionAnalysis || deep) ResolveGameGen(snapshot, token);
         // Resource declaration indices are project-local; common resource precedence is applied at use sites below.
         var resources = new Dictionary<string, List<(string Name, LanguageLocation Location)>>(StringComparer.Ordinal);
         void Declare(string kind, string name, LanguageDocument doc, ZrdNode node)
@@ -186,11 +197,11 @@ public sealed class LanguageProject
                     }
                 }
             }
-            if (!deep) continue;
+            if (!deep && !(missionAnalysis && documents.ContainsKey($"gamegen/{mission}.gs"))) continue;
             try
             {
                 // Reuse the source assembler and compiler, never run gamegen executables or export archives.
-                var world = snapshot.World(mission, token);
+                var world = GameGenWorldCache.World(Root, mission, files, token);
                 var evaluated = AnimationCompiler.Evaluate(files, rootDoc.Path, world.World.Nodes.Select(n => n.Name).ToArray(), snapshot.Effects(mission, token), token);
                 foreach (string warning in evaluated.Warnings.Take(RecoilLanguage.MaximumDiagnostics)) rootDoc.Report("RECOIL_COMPILER", "warning", warning, new(0, 0), mission);
                 if (evaluated.EngineRejection is { } rejection) rootDoc.Report("RECOIL_ENGINE", "error", rejection, new(0, 0), mission);
