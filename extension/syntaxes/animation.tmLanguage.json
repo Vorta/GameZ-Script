@@ -1,0 +1,27 @@
+{
+  "name": "GameZ Animation Script",
+  "scopeName": "source.gamez.animation",
+  "patterns": [
+    { "begin": "^\\s*(SI Animation Script)\\s*$", "end": "\\z", "contentName": "meta.si-animation.gamez", "beginCaptures": {
+      "1": { "name": "entity.name.type.gamez.animation" }
+    }, "patterns": [
+      { "name": "comment.line.number-sign.gamez", "match": "^\\s*#.*$" },
+      { "name": "entity.name.function.gamez.animation", "match": "(?<=Object:)[^\\r\\n]+" },
+      { "name": "support.type.property-name.gamez.animation", "match": "\\b(?:FRAMES|OBJECTS|Frame|Object|Scaling|Rotation|Translation):" },
+      { "name": "constant.numeric.float.gamez", "match": "(?<![\\w.])[+-]?(?:(?:[0-9]+\\.[0-9]*|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)(?![\\w.])" },
+      { "name": "constant.numeric.integer.gamez", "match": "(?<![\\w.])[+-]?[0-9]+(?![\\w.])" }
+    ] },
+    { "name": "comment.line.number-sign.gamez", "begin": "#", "end": "$" },
+    { "name": "string.quoted.double.gamez", "begin": "\"", "end": "\"|$", "patterns": [
+      { "name": "constant.character.escape.gamez", "match": "\\\\(?:[\\\\\"]|x[0-9A-Fa-f]{2})" },
+      { "name": "invalid.illegal.escape.gamez", "match": "\\\\." }
+    ] },
+    { "name": "entity.name.type.gamez.animation", "match": "^\\s*SI Animation Script\\s*$" },
+    { "name": "entity.name.function.gamez.animation", "match": "(?<=Object:)[^#\\r\\n]+|(?<=OBJECT\\s)[^#\\s]+" },
+    { "name": "support.type.property-name.gamez.animation", "match": "\\b(?:FRAMES|OBJECTS|Frame|Object|Scaling|Rotation|Translation):|\\b(?:OBJECT|FRAME|POSITION|ROTATION|SCALE|VELOCITY|SPIN|GROWTH|MOTION|LOOP_SECONDS|FRAME_COUNT|PART|NAME|SAMPLES)\\b" },
+    { "name": "constant.numeric.float.raw.gamez", "match": "(?<![\\w.])f32:[0-9a-fA-F]{8}(?![\\w.])" },
+    { "name": "constant.numeric.float.gamez", "match": "(?<![\\w.])[+-]?(?:(?:[0-9]+\\.[0-9]*|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)(?![\\w.])" },
+    { "name": "constant.numeric.integer.gamez", "match": "(?<![\\w.])[+-]?[0-9]+(?![\\w.])" },
+    { "name": "punctuation.section.parens.gamez", "match": "[()]" }
+  ]
+}

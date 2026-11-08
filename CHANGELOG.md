@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — 2026-11-08
+
+- Add game-specific MechWarrior 3 resource, animation and GameGen assistance while retaining RECOIL rules.
+- Add GameZ Animation Script mode for SI, legacy keyframe and sampled mech-motion ZAN sources, with value hints and navigation.
+- Detect native source game identity per workspace folder; `gamez.dialect` can select RECOIL or MW3 explicitly.
+- Show the active game and detection evidence in a clickable status indicator; Auto leaves ambiguous files neutral until the game is determined or selected.
+- Keep nested MW3 objective `node_state` commands out of RECOIL spatial network validation, and use `GAMEZ_` diagnostic codes for checks shared by both games.
+- Validate native campaigns and mission readers in memory, including closed animation sources, using the bundled source support.
+- Isolate nested source projects during detection, analysis and validation; retain local assistance when project context is unavailable.
+- Keep the game indicator current through automatic server recovery and cancel validation when its source or workspace changes.
+
 ## 1.3.0 — 2026-11-02
 
 - Support the optional reRECOIL 1.0.7.3 AI beam pause as a tenth vehicle weapon operand. Require a finite nonnegative FLOAT; nine-operand entries remain byte-identical. Warn on ignored player/non-beam settings, with matching hints and signature help.

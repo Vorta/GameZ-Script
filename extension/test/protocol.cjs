@@ -21,7 +21,7 @@ const rpc = require('vscode-jsonrpc/node');
     fs.writeFileSync(file, source);
     const vscodeUri = p => pathToFileURL(p).href.replace(/^file:\/\/\/([A-Za-z]):/, 'file:///$1%3A');
     const trusted = !process.argv.includes('--restricted');
-    const init = await connection.sendRequest('initialize', { processId: process.pid, workspaceFolders: [{uri:vscodeUri(temporary), name:'fixture'}], initializationOptions:{trusted} });
+    const init = await connection.sendRequest('initialize', { processId: process.pid, workspaceFolders: [{uri:vscodeUri(temporary), name:'fixture'}], initializationOptions:{trusted,dialect:'recoil'} });
     assert.equal(init.serverInfo.name, 'GameZ Script');
     assert.equal(init.serverInfo.version, require('../package.json').version);
     assert(init.capabilities.inlayHintProvider);

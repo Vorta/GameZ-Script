@@ -11,7 +11,7 @@ public sealed class GameGenLanguageTests
     {
         var doc = Script("Object3DTranslate 1,2.0,3 # (not resource syntax\nsource \"a#comment\nFindNodes target\n");
         Assert.True(doc.Complete);
-        Assert.DoesNotContain(doc.Diagnostics, d => d.Code == "RECOIL_SYNTAX");
+        Assert.DoesNotContain(doc.Diagnostics, d => d.Code == "GAMEZ_SYNTAX");
         Assert.DoesNotContain(doc.Diagnostics, d => d.Code == "GAMEZ_COMMAND");
         Assert.Contains(doc.Tokens, t => t.Text == "\"a");
         Assert.DoesNotContain(doc.Tokens, t => t.Text.Contains("comment"));
@@ -183,7 +183,7 @@ public sealed class GameGenLanguageTests
         using var f = new SourceWorldFixture();
         f.Write("gamegen/support/bft1.gw", "set x\nEcho " + string.Concat(Enumerable.Repeat("%x%", 20_000)));
         f.Write("gamegen/m1.gs", Loaded(f));
-        Assert.Contains(Project(f).Documents["gamegen/support/bft1.gw"].Diagnostics, d => d.Code == "RECOIL_LIMIT");
+        Assert.Contains(Project(f).Documents["gamegen/support/bft1.gw"].Diagnostics, d => d.Code == "GAMEZ_LIMIT");
     }
     [Fact]
     public void CommonAivIsTheSelectedResource()

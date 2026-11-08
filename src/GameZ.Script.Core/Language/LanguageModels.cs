@@ -24,6 +24,11 @@ public sealed class LanguageDocument
 {
     public string Path { get; }
     public string Text { get; }
+    /// <summary>Compatibility game value. Use ResolvedGame when analysis may be neutral.</summary>
+    public GameVariant Game { get; internal set; } = GameVariant.Recoil;
+    /// <summary>False when editor analysis deliberately defers game-specific semantics.</summary>
+    public bool HasGameProfile { get; internal set; } = true;
+    public GameVariant? ResolvedGame => HasGameProfile ? Game : null;
     public string Family { get; internal set; } = "resource";
     public bool Complete { get; internal set; }
     public IReadOnlyList<LanguageDiagnostic> Diagnostics => diagnostics;
@@ -50,7 +55,7 @@ public sealed class LanguageDocument
         if (diagnostics.Count < RecoilLanguage.MaximumDiagnostics)
             diagnostics.Add(new(code, severity, message.Length > 2048 ? message[..2048] + "…" : message, span, mission));
         else if (diagnostics.Count == RecoilLanguage.MaximumDiagnostics)
-            diagnostics.Add(new("RECOIL_LIMIT", "information", "Further diagnostics omitted; analysis is incomplete.", new(0, 0)));
+            diagnostics.Add(new("GAMEZ_LIMIT", "information", "Further diagnostics omitted; analysis is incomplete.", new(0, 0)));
     }
 }
 

@@ -4,12 +4,38 @@ exports.run = async function() {
   const file = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/anim.zad');
   const doc = await vscode.workspace.openTextDocument(file); await vscode.window.showTextDocument(doc);
   assert.equal(doc.languageId,'gamez-script');
-  const extension = vscode.extensions.getExtension('Vorta.gamez-script'); assert(extension); await extension.activate();
+  const extension = vscode.extensions.getExtension('Vorta.gamez-script'); assert(extension); const api = await extension.activate();
+  const waitStatus = async (game, source) => {
+    for(let attempt=0;attempt<100;attempt++) {
+      const state=api.getGameStatus();
+      if(state.visible && state.profile && state.profile.game===game && (!source || state.profile.source===source)) return state;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.fail('Unexpected GameZ status: '+JSON.stringify(api.getGameStatus()));
+  };
+  const unknown=await waitStatus(null,'unknown');
+  assert.equal(unknown.text,'GameZ: Unknown','Unknown game is explicit in the actual status item');
+  assert.equal((await vscode.commands.executeCommand('vscode.executeInlayHintProvider',file,new vscode.Range(0,0,0,200))).length,0,'Unknown does not leak RECOIL animation hints');
+  const identityUri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/common/models/identity.gltf');
+  const identity = game => Buffer.from(JSON.stringify({asset:{version:'2.0'},scene:0,scenes:[{extras:{zstudio:{sourceFormat:4,...(game ? {game} : {})}}}],nodes:[]}));
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/common/models'));
+  await vscode.workspace.fs.writeFile(identityUri,identity());
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  const recoilStatus=await waitStatus('recoil','workspace');
+  assert.equal(recoilStatus.text,'GameZ: RECOIL');
+  assert(recoilStatus.tooltip.includes('source-model metadata'));
+  const plain=await vscode.workspace.openTextDocument({language:'plaintext',content:'status visibility'});
+  await vscode.window.showTextDocument(plain);
+  for(let attempt=0;attempt<50&&api.getGameStatus().visible;attempt++) await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(api.getGameStatus().visible,false,'Status hides for unrelated files');
+  await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  await vscode.window.showTextDocument(doc);
+  await waitStatus('recoil','workspace');
   await new Promise(resolve=>setTimeout(resolve,600)); // Let the initial didOpen background pass settle.
   const validation = await vscode.commands.executeCommand('gamez.server.validateProject',file.toString());
   assert.equal(validation.files,3,'Project validation with native VS Code URI');
   // This minimal project has no world script, giving a deep-only finding to invalidate.
-  const deepErrors = ()=>vscode.languages.getDiagnostics(file).filter(d=>d.code==='RECOIL_PROJECT' && d.message.includes('World binding validation'));
+  const deepErrors = ()=>vscode.languages.getDiagnostics(file).filter(d=>d.code==='GAMEZ_PROJECT' && d.message.includes('World binding validation'));
   for(let attempt=0;attempt<50 && deepErrors().length===0;attempt++) await new Promise(resolve=>setTimeout(resolve,100));
   assert(deepErrors().length>0,'Deep validation finding is published');
   const recipe = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/coast.terrain.json');
@@ -56,9 +82,14 @@ exports.run = async function() {
     editor.selection = new vscode.Selection(doc.positionAt(at), doc.positionAt(at));
     const items = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', file, doc.positionAt(at));
     assert(items.items.some(item=>item.range), 'Completion has an explicit replacement range');
-    await vscode.commands.executeCommand('editor.action.triggerSuggest');
-    await new Promise(resolve=>setTimeout(resolve,800));
-    await vscode.commands.executeCommand('acceptSelectedSuggestion');
+    // Startup/background work can temporarily move focus or cancel a pending suggestion.
+    // Retry only while no edit was accepted; an incorrect replacement still fails below.
+    for(let attempt=0;attempt<8 && doc.getText()===text;attempt++) {
+      await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+      await vscode.commands.executeCommand('editor.action.triggerSuggest');
+      await new Promise(resolve=>setTimeout(resolve,400));
+      await vscode.commands.executeCommand('acceptSelectedSuggestion');
+    }
     assert(doc.getText().includes(expected), 'Accepted completion replaces the complete numeric/quoted source token: '+doc.getText());
   }
   await editor.edit(edit=>edit.insert(doc.positionAt(doc.getText().length),'é'));
@@ -71,7 +102,7 @@ exports.run = async function() {
   const vehicleEditor = await vscode.window.showTextDocument(vehicle);
   const at = vehicle.getText().indexOf('5.5');
   await vehicleEditor.edit(edit=>edit.replace(new vscode.Range(vehicle.positionAt(at), vehicle.positionAt(at+3)), '5'));
-  const typeErrors = ()=>vscode.languages.getDiagnostics(vehicle.uri).filter(d=>d.code==='RECOIL_TYPE');
+  const typeErrors = ()=>vscode.languages.getDiagnostics(vehicle.uri).filter(d=>d.code==='GAMEZ_TYPE');
   for(let attempt=0;attempt<50 && typeErrors().length===0;attempt++) await new Promise(resolve=>setTimeout(resolve,100));
   assert.equal(typeErrors().length,1,'Unsaved float-to-integer edit produces one error');
   assert.equal(typeErrors()[0].severity,vscode.DiagnosticSeverity.Error,'Float type mismatch is red/error severity');
@@ -183,5 +214,59 @@ exports.run = async function() {
   assert.equal(missingTemplates().length,0,'Unsaved support load clears native AIV error');
   assert.equal(Buffer.from(await vscode.workspace.fs.readFile(supportUri)).toString(),'# template absent','Analysis leaves support source on disk unchanged');
   await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
-  console.log('PASS GameZ Script real VS Code extension-host language, outline, hover, completion, snippets, inlay hints, signature help and encoding diagnostics');
+  // Native game identity and animation associations in this disposable source project.
+  await vscode.workspace.fs.writeFile(identityUri,identity('mw3'));
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  const nativeUri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/net_99.zrd');
+  const nativeText='(version (106) node_00 (12 (1.0 2.0 3.0) (1)) node_01 (12 (4.0 5.0 6.0) (-1)))';
+  await vscode.workspace.fs.writeFile(nativeUri,Buffer.from(nativeText));
+  const nativeDoc=await vscode.workspace.openTextDocument(nativeUri);
+  await vscode.window.showTextDocument(nativeDoc);
+  const nativeStatus=await waitStatus('mw3','workspace');
+  assert.equal(nativeStatus.text,'GameZ: MW3');
+  const folderConfiguration=vscode.workspace.getConfiguration('gamez',vscode.workspace.workspaceFolders[0].uri);
+  await folderConfiguration.update('dialect','recoil',vscode.ConfigurationTarget.WorkspaceFolder);
+  const overrideStatus=await waitStatus('recoil','configuration');
+  assert(overrideStatus.tooltip.includes('Explicit gamez.dialect override'));
+  await folderConfiguration.update('dialect','auto',vscode.ConfigurationTarget.WorkspaceFolder);
+  await waitStatus('mw3','workspace');
+  const nativeHints=await vscode.commands.executeCommand('vscode.executeInlayHintProvider',nativeUri,new vscode.Range(nativeDoc.positionAt(0),nativeDoc.positionAt(nativeDoc.getText().length)));
+  assert(nativeHints.length>=8,'Auto native identity reaches fast hint path');
+  const motionUri=vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri,'data/m1/zrdr/clip.zan');
+  const motion='MOTION (LOOP_SECONDS (1.0) FRAME_COUNT (1) PART (NAME (hip) SAMPLES ((0.0 1.0 2.0 1.0 0.0 0.0 0.0) (0.0 1.0 2.0 1.0 0.0 0.0 0.0))))';
+  await vscode.workspace.fs.writeFile(motionUri,Buffer.from(motion));
+  const motionDoc=await vscode.workspace.openTextDocument(motionUri),motionEditor=await vscode.window.showTextDocument(motionDoc);
+  assert.equal(motionDoc.languageId,'gamez-animation','Native ZAN language association');
+  const motionHints=await vscode.commands.executeCommand('vscode.executeInlayHintProvider',motionUri,new vscode.Range(motionDoc.positionAt(0),motionDoc.positionAt(motionDoc.getText().length)));
+  assert(motionHints.length>=14,'Sample translation and WXYZ values receive native hints');
+  assert(motionHints.some(h=>/w:/i.test(h.label)),'Quaternion W ordering');
+  await motionEditor.edit(edit=>edit.insert(motionDoc.positionAt(motionDoc.getText().length),'\n# unsaved native motion'));
+  assert.equal(Buffer.from(await vscode.workspace.fs.readFile(motionUri)).toString(),motion,'Animation assistance preserves unsaved source');
+  await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+  // Source markers still establish MW3 when model metadata disappears.
+  await vscode.workspace.fs.delete(identityUri);
+  const restored=await vscode.workspace.openTextDocument(file);
+  await vscode.window.showTextDocument(restored);
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  await waitStatus('mw3','project-source');
+  // Closing an editor need not immediately close its TextDocument. Clear both the
+  // disposable disk fixtures and any retained buffers before expecting Unknown.
+  for(const uri of [nativeUri,motionUri]) {
+    const source=await vscode.workspace.openTextDocument(uri);
+    const cleanup=new vscode.WorkspaceEdit();
+    cleanup.replace(uri,new vscode.Range(source.positionAt(0),source.positionAt(source.getText().length)),'');
+    assert(await vscode.workspace.applyEdit(cleanup),'Clear disposable native marker buffer');
+    assert(await source.save(),'Clear disposable native marker file');
+    await vscode.window.showTextDocument(source);
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    await vscode.workspace.fs.delete(uri);
+  }
+  // Recovery profiles reuse this disposable workspace and exercise RECOIL layouts.
+  await vscode.window.showTextDocument(restored);
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  await waitStatus(null,'unknown');
+  await vscode.workspace.fs.writeFile(identityUri,identity());
+  await vscode.commands.executeCommand('gamez.restartLanguageServer');
+  await waitStatus('recoil','workspace');
+  console.log('PASS GameZ Script real VS Code extension-host language, outline, hover, completion, snippets, inlay hints, signature help, encoding, MW3 and ZAN');
 };

@@ -95,6 +95,8 @@ public static partial class SourceBuilder
         profile ??= BuildProfiles.Modern;
         if (!SourceProject.IsProject(root)) throw new InvalidDataException("This folder is not a source project (it needs data and gamegen folders).");
         SourceProject.RequireCurrentFormat(root, token);
+        snapshot ??= new Snapshot(root, inventoryToken: token);
+        if (snapshot.Game == GameVariant.MechWarrior3) return Mw3Project.Plan(root, snapshot, token);
         PendingInventory? pending = added == null ? null : PendingInventory.Capture(added, inventory, token);
         added = pending;
         List<SourceOutputPlan> plans = [];
@@ -237,10 +239,15 @@ public static partial class SourceBuilder
     /// </summary>
     internal sealed class Snapshot(string root, IReadOnlyDictionary<string, byte[]>? overlay = null, Func<string, Exception>? changed = null,
         long maximumRetainedBytes = SourceExtractor.MaximumRetainedBytes, EffectLimits? effectLimits = null,
-        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false)
+        long inventoryLimit = InventoryBudget.MaximumUnits, CancellationToken inventoryToken = default, bool retainModelSources = false, GameVariant? game = null,
+        Func<string, bool>? sourceFilter = null)
     {
+        private GameVariant? resolvedGame;
+        internal GameVariant Game => resolvedGame ??= game ?? SourceGameProfile.Detect(root, this, inventoryToken);
         private readonly (InventoryBudget Budget, PendingInventory Added) inventory = CapturePending(root, overlay, inventoryLimit, inventoryToken);
         internal InventoryBudget Inventory => inventory.Budget;
+        // Editor analysis can scope reads to the owning source project without changing compiler defaults.
+        internal bool IncludesSource(string relative) => sourceFilter?.Invoke(relative) ?? true;
         private EffectDiscovery? effectDiscovery;
         internal HashSet<string>? Effects(string mission, CancellationToken token) =>
             (effectDiscovery ??= new(this, root, effectLimits ?? new())).ForMission(mission, token);
@@ -386,6 +393,7 @@ public static partial class SourceBuilder
             SourceProject.RequireSource(relative);
             // A name Windows cannot give a folder never exists, as _access reports it.
             if (relative.AsSpan().IndexOfAny(InvalidFolderCharacters) >= 0) return false;
+            if (!IncludesSource(relative + "/.gamez-analysis")) return false;
             Depend(relative);
             if (overlay != null)
             {
@@ -410,6 +418,7 @@ public static partial class SourceBuilder
         internal bool Exists(string relative)
         {
             SourceProject.RequireSource(relative);
+            if (!IncludesSource(relative)) return false;
             Depend(relative);
             if (overlay?.ContainsKey(relative) == true) return true;
             string path = SourceProject.Resolve(root, relative);
@@ -426,6 +435,7 @@ public static partial class SourceBuilder
         internal byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits)
         {
             token.ThrowIfCancellationRequested();
+            if (!IncludesSource(relative)) throw new FileNotFoundException($"{relative} belongs to another source project.");
             Depend(relative);
             if (overlay?.TryGetValue(relative, out var pending) == true)
             {
@@ -532,7 +542,7 @@ public static partial class SourceBuilder
             {
                 try
                 {
-                    WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token);
+                    WorldAssembler assembler = new(new ProjectFiles(this, root, overlay), token) { Game = Game };
                     var world = assembler.Assemble($"{mission}.gs");
                     // Include per-node provenance and its applied instruction references, beside decoded geometry.
                     Retain(SourceExtractor.Footprint(world) + 512L * assembler.Provenance.Count + 256L * assembler.Executions.Count + assembler.AuthoredHierarchyFootprint
@@ -553,6 +563,7 @@ public static partial class SourceBuilder
         /// <summary>The assembler's view of the project: reads go through the snapshot, and links are refused.</summary>
         private sealed class ProjectFiles(Snapshot snapshot, string root, IReadOnlyDictionary<string, byte[]>? overlay) : IProjectFiles
         {
+            public GameVariant Game => snapshot.Game;
             public bool Exists(string relative) => snapshot.Exists(relative);
             public bool FolderExists(string relative) => snapshot.FolderExists(relative);
             public byte[] Read(string relative, CancellationToken token, ProjectReadLimits limits) { SourceProject.RequireSource(relative); if (overlay?.ContainsKey(relative) != true) SourceProject.RejectNestedLinks(root, relative); return snapshot.Read(relative, token, limits); }
@@ -1012,6 +1023,7 @@ public static partial class SourceBuilder
         "textures" => BuildTexturePack(plan, snapshot, token),
         "world" => BuildWorld(plan, snapshot, token),
         "animations" => BuildAnimations(plan, snapshot, token),
+        "mw3-mechs" or "mw3-motion" => Mw3Project.Build(plan, snapshot, token),
         _ => throw new InvalidDataException($"Unknown output family '{plan.Family}'.")
     };
 
@@ -1049,7 +1061,7 @@ public static partial class SourceBuilder
                 // Animation definitions are compiled into anim.zbd; the game never reads them from an archive.
                 if (Animation.AnimationDefinitionSet.HoldsDefinitions(tree))
                     throw new InvalidDataException($"it holds animation definitions (ANIMATION_DEFINITIONS), which belong in a {Animation.AnimationDefinitionSet.Extension} file beside it; a project reconstructed before zStudio kept definitions in {Animation.AnimationDefinitionSet.Extension} files must be reconstructed again.");
-                VehicleWeaponRules.ValidateForCompilation(input, tree, token, message =>
+                if (snapshot.Game != GameVariant.MechWarrior3) VehicleWeaponRules.ValidateForCompilation(input, tree, token, message =>
                 {
                     if (warnings.Count < 200) warnings.Add(input + ": " + message);
                     else if (warnings.Count == 200) warnings.Add("Further resource warnings omitted.");
@@ -1293,7 +1305,7 @@ public static partial class SourceBuilder
         if (snapshot.HasWorld(mission)) nodes = snapshot.World(mission, token).World.Nodes.Select(n => n.Name).ToArray();
         else warnings.Add($"{mission} has no world script ({WorldScript(mission)}), so animation roots and node names are not checked and patterns do not expand.");
         // Without an effects.zrd in the project the game's own resource archives supply it, so nothing can be checked.
-        var effects = snapshot.Effects(mission, token);
+        var effects = snapshot.Game == GameVariant.MechWarrior3 ? null : snapshot.Effects(mission, token);
         var result = Animation.AnimationCompiler.Compile(snapshot.Files(), AnimationRoot(mission), nodes, effects, token);
         if (result.EngineRejection is { } rejection) throw new InvalidDataException(rejection);
         return new(result.Bytes, result.Package.Entries.Count - 1, [.. warnings, .. result.Warnings]) { Package = result.Package };
@@ -1302,7 +1314,7 @@ public static partial class SourceBuilder
     private static Built BuildWorld(SourceOutputPlan plan, Snapshot snapshot, CancellationToken token)
     {
         var assembled = snapshot.World(plan.Path.Split('/')[0], token);
-        return new(GameZWriter.Write(assembled.World, token), assembled.World.Nodes.Count, assembled.Warnings);
+        return new(GameZWriter.Write(assembled.World, snapshot.Game == GameVariant.MechWarrior3 ? 27u : 15u, token), assembled.World.Nodes.Count, assembled.Warnings);
     }
 
     /// <summary>A texture is named by its file name without the extension, as the engine looks textures up by name.</summary>

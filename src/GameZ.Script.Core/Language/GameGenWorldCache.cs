@@ -10,11 +10,11 @@ internal static class GameGenWorldCache
     private sealed record Probe(string Path, bool Folder, bool Present, string? Hash, ProjectReadLimits? Limits);
     private sealed record Entry(SourceBuilder.Snapshot.AssembledWorld World, Probe[] Inputs, long Bytes);
     private static readonly Lock gate = new();
-    private static readonly Dictionary<(string Root, string Mission), Entry> entries = [];
+    private static readonly Dictionary<(string Root, string Mission, GameVariant Game), Entry> entries = [];
     private const long MaximumBytes = 192L * 1024 * 1024;
-    internal static SourceBuilder.Snapshot.AssembledWorld World(string root, string mission, IProjectFiles files, CancellationToken token)
+    internal static SourceBuilder.Snapshot.AssembledWorld World(string root, string mission, IProjectFiles files, CancellationToken token, GameVariant game = GameVariant.Recoil)
     {
-        var key = (root.ToUpperInvariant(), mission);
+        var key = (root.ToUpperInvariant(), mission, game);
         Entry? cached; lock (gate) entries.TryGetValue(key, out cached);
         if (cached != null)
         {
@@ -28,7 +28,7 @@ internal static class GameGenWorldCache
             if (valid) return cached.World;
         }
         var tracked = new TrackingFiles(files);
-        var assembler = new WorldAssembler(tracked, token);
+        var assembler = new WorldAssembler(tracked, token) { Game = game };
         var world = assembler.Assemble(mission + ".gs");
         var built = new SourceBuilder.Snapshot.AssembledWorld(world, assembler.Warnings, assembler.TextureFiles, assembler.TextureAddressing, assembler.LoadedRoots)
         {

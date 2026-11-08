@@ -17,7 +17,7 @@ public sealed class ResourceMembers
     public AssetDocument Document => source;
     public bool IsArchive => source.Probe.Family == FormatFamily.Archive;
 
-    public ResourceMembers(AssetDocument document, CancellationToken token = default)
+    public ResourceMembers(AssetDocument document, CancellationToken token = default, Sources.SourceGameProfile? profile = null)
     {
         token.ThrowIfCancellationRequested();
         if (document.Probe.Family is not (FormatFamily.Archive or FormatFamily.Zrd) || document.Diagnostics.Any(d => d.Severity == "Error"))
@@ -27,7 +27,7 @@ public sealed class ResourceMembers
         var standalone = IsArchive ? null : document.Assets.SingleOrDefault()?.Content as ZrdNode
             ?? (text ? Sources.ZrdText.Parse(document.Bytes.Span, token) : ZrdDecoder.Read(document.Bytes, token));
         // A source text .zrd is shown as the compiled member the game reads.
-        if (text)
+        if (text && (profile?.Game ?? document.Game) != GameVariant.MechWarrior3)
         {
             try { Sources.VehicleWeaponRules.ValidateForCompilation(document.Path, standalone!, token); }
             catch (InvalidDataException ex) { throw new InvalidDataException($"{document.Path}: {ex.Message}", ex); }

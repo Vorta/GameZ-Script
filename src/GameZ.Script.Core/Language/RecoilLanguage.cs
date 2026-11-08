@@ -8,15 +8,32 @@ namespace GameZ.Script.Core.Language;
 public static partial class RecoilLanguage
 {
     public const int MaximumDiagnostics = 200, MaximumResults = 200, MaximumTokens = 250_000;
-    public static LanguageDocument Analyze(string path, string text, CancellationToken token = default)
+    public static LanguageDocument Analyze(string path, string text, CancellationToken token = default, GameVariant? game = null)
+        => AnalyzeCore(path, text, token, game, legacyFallback: true);
+
+    /// <summary>Analyze an already resolved editor profile. Null deliberately means neutral, never RECOIL fallback.</summary>
+    public static LanguageDocument AnalyzeResolved(string path, string text, GameVariant? game, CancellationToken token = default)
+        => AnalyzeCore(path, text, token, game, legacyFallback: false);
+
+    private static LanguageDocument AnalyzeCore(string path, string text, CancellationToken token, GameVariant? game, bool legacyFallback)
     {
         ArgumentNullException.ThrowIfNull(text);
-        if (GameGenLanguage.IsScript(path)) return GameGenLanguage.Analyze(path, text, token);
-        var result = new LanguageDocument(path, text);
+        if (path.EndsWith(".zan", StringComparison.OrdinalIgnoreCase))
+        {
+            var animation = ZanLanguage.Analyze(path, text, token, game);
+            animation.HasGameProfile = legacyFallback || game != null;
+            return animation;
+        }
+        if (GameGenLanguage.IsScript(path)) return GameGenLanguage.Analyze(path, text, token, game, legacyFallback);
+        var result = new LanguageDocument(path, text)
+        {
+            Game = game ?? (legacyFallback ? DetectDocumentGame(text, token) : GameVariant.Recoil),
+            HasGameProfile = legacyFallback || game != null
+        };
         if (text.Length > SourceProject.MaximumSourceTextBytes)
-        { result.Report("RECOIL_LIMIT", "information", "Document exceeds the 16 MiB analysis limit.", new(0, 0)); return result; }
+        { result.Report("GAMEZ_LIMIT", "information", "Document exceeds the 16 MiB analysis limit.", new(0, 0)); return result; }
         if (text.Contains('\0'))
-        { result.Report("RECOIL_BINARY", "information", "This appears to be compiled binary data. GameZ Script analyzes text source files.", new(0, 0)); return result; }
+        { result.Report("GAMEZ_BINARY", "information", "This appears to be compiled binary data. GameZ Script analyzes text source files.", new(0, 0)); return result; }
         int errorAt = 0; string? errorText = null;
         try
         {
@@ -36,7 +53,7 @@ public static partial class RecoilLanguage
         catch (InvalidDataException ex)
         {
             int start = Math.Clamp(errorAt, 0, text.Length);
-            result.Report(errorText == null ? "RECOIL_LIMIT" : "RECOIL_SYNTAX", errorText == null ? "information" : "error",
+            result.Report(errorText == null ? "GAMEZ_LIMIT" : "GAMEZ_SYNTAX", errorText == null ? "information" : "error",
                 errorText ?? ex.Message, new(start, start < text.Length ? 1 : 0));
         }
         result.tokens.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
@@ -58,8 +75,9 @@ public static partial class RecoilLanguage
         }
         result.Family = PartialFamily(result.tokens);
         if (result.Family == "resource") result.Family = FileFamily(path);
+        if (result.Game == GameVariant.MechWarrior3) result.Family = Mw3Family(result);
         int unsupported = text.AsSpan().IndexOfAnyExceptInRange('\0', '\xFF');
-        if (unsupported >= 0) result.Report("RECOIL_ENCODING", "error", "Source files use Latin-1. This character cannot be saved in the source encoding.", new(unsupported, 1));
+        if (unsupported >= 0) result.Report("GAMEZ_ENCODING", "error", "Source files use Latin-1. This character cannot be saved in the source encoding.", new(unsupported, 1));
         if (result.Root != null)
         {
             var root = result.Root;
@@ -67,6 +85,7 @@ public static partial class RecoilLanguage
             Collect(result, root, null, token);
             result.Family = Classify(result);
             if (result.Family == "resource") result.Family = FileFamily(path);
+            if (result.Game == GameVariant.MechWarrior3) result.Family = Mw3Family(result);
             if (result.Family is "sounds" or "effects")
             {
                 // Classification needs the outer tags. Once known, collect mixed positional/tagged
@@ -74,10 +93,18 @@ public static partial class RecoilLanguage
                 result.Records.Clear();
                 Collect(result, root, null, token, structured: true);
             }
-            if (result.Complete) Validate(result, token);
+            if (result.Complete && result.HasGameProfile)
+            {
+                if (result.Game == GameVariant.MechWarrior3) ValidateMw3(result, token);
+                else Validate(result, token);
+            }
             int remaining = MaximumResults;
             result.Symbols = Symbols(result, null, ref remaining);
-            BuildArguments(result, token);
+            if (result.HasGameProfile)
+            {
+                if (result.Game == GameVariant.MechWarrior3) BuildMw3Arguments(result, token);
+                else BuildArguments(result, token);
+            }
         }
         return result;
     }
@@ -102,6 +129,7 @@ public static partial class RecoilLanguage
             bool paired = value?.Kind == ZrdKind.Array || (parent?.Key.StartsWith("MISSION", StringComparison.Ordinal) == true && value?.Kind != ZrdKind.Array)
                 || key.Text is "HIGH" or "MED" or "LOW" && Ancestors(parent).Contains("SETS") && value?.Kind == ZrdKind.String
                 || value != null && IsResourceScalar(key.Text, Ancestors(parent));
+            if (doc.Game == GameVariant.MechWarrior3 && value != null && NativeBareScalar(doc.Family, key.Text)) paired = true;
             var record = new LanguageRecord(key.Text, key, paired ? value : null, parent);
             doc.Records.Add(record);
             if (paired && value != null)
@@ -141,9 +169,12 @@ public static partial class RecoilLanguage
 
     public static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument document, int offset)
     {
+        if (!document.HasGameProfile && !document.Family.StartsWith("zan-", StringComparison.Ordinal)) return [];
         if (document.Script != null) return GameGenLanguage.Complete(document, offset);
+        if (document.Family.StartsWith("zan-", StringComparison.Ordinal)) return ZanLanguage.Complete(document, offset);
         offset = Math.Clamp(offset, 0, document.Text.Length);
         if (InComment(document, offset)) return [];
+        if (document.Game == GameVariant.MechWarrior3) return Mw3Complete(document, offset);
         var replacement = CompletionSpan(document, offset);
         string prefix = CompletionPrefix(document, offset);
         if (ArgumentCompletions(document, offset) is { } arguments)
@@ -194,7 +225,9 @@ public static partial class RecoilLanguage
 
     public static LanguageHover? Hover(LanguageDocument document, int offset)
     {
+        if (!document.HasGameProfile && !document.Family.StartsWith("zan-", StringComparison.Ordinal)) return null;
         if (document.Script != null) return GameGenLanguage.Hover(document, offset);
+        if (document.Family.StartsWith("zan-", StringComparison.Ordinal)) return ZanLanguage.Hover(document, offset);
         var item = document.Tokens.FirstOrDefault(t => t.Span.Start <= offset && t.Span.End > offset);
         if (item == null) return null;
         if (document.Arguments.Hints.TryGetValue(item.Span.Start, out var hint)) return new(hint.Documentation, item.Span);
@@ -202,16 +235,16 @@ public static partial class RecoilLanguage
         if (document.PositionalValues.Any(span => span.Start <= offset && offset < span.End)) return null;
         var record = document.Records.FirstOrDefault(r => document.Span(r.KeyNode) == item.Span);
         var context = Context(document, item.Span.Start).Where(p => p.Length > 0).ToArray();
-        var field = Field(document.Family, item.Text, record?.Parent?.Key ?? context.LastOrDefault() ?? "", record == null ? context : Ancestors(record.Parent));
+        var field = Field(document, item.Text, record?.Parent?.Key ?? context.LastOrDefault() ?? "", record == null ? context : Ancestors(record.Parent));
         if (field != null) return new(FieldDocumentation(field), item.Span);
         if (ScalarOperand(document, item.Span.Start) is { } scalarRecord &&
-            Field(document.Family, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent)) is { } scalarField)
+            Field(document, scalarRecord.Key, scalarRecord.Parent?.Key ?? "", Ancestors(scalarRecord.Parent)) is { } scalarField)
             return new(FieldDocumentation(scalarField), item.Span);
         if (document.Family == "animation" && context.Length >= 2 && context[^1] == "VALUE" && context[^2] == "CALLBACK" && int.TryParse(item.Text, out int callback))
             return new(CallbackHelp(callback), item.Span);
         if (context.Length > 0)
         {
-            var owner = Field(document.Family, context[^1], context.Length > 1 ? context[^2] : "", context[..^1]);
+            var owner = Field(document, context[^1], context.Length > 1 ? context[^2] : "", context[..^1]);
             if (owner?.Choices?.Contains(item.Text, StringComparer.Ordinal) == true) return new(FieldDocumentation(owner), item.Span);
         }
         return null;
@@ -229,6 +262,7 @@ public static partial class RecoilLanguage
     internal static bool InComment(LanguageDocument doc, int offset)
     {
         if (doc.Script != null) return GameGenLanguage.InComment(doc, offset);
+        if (doc.Family.StartsWith("zan-", StringComparison.Ordinal)) return ZanLanguage.InComment(doc, offset);
         offset = Math.Clamp(offset, 0, doc.Text.Length);
         int start = 0;
         foreach (var token in doc.Tokens)

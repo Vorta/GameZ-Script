@@ -85,20 +85,20 @@ public sealed class VehicleBeamPauseTests
     }
 
     [Theory]
-    [InlineData(" 4", "RECOIL_TYPE", "4.0")]
+    [InlineData(" 4", "GAMEZ_TYPE", "4.0")]
     [InlineData(" -1.0", "RECOIL_RANGE", "nonnegative")]
-    [InlineData(" f32:7F800000", "RECOIL_FINITE", "finite")]
-    [InlineData(" f32:7FC00001", "RECOIL_FINITE", "finite")]
-    [InlineData(" invalid", "RECOIL_TYPE", "FLOAT")]
-    [InlineData(" (4.0)", "RECOIL_TYPE", "FLOAT")]
-    [InlineData(" 4.0 5.0", "RECOIL_ARITY", "9 or 10")]
+    [InlineData(" f32:7F800000", "GAMEZ_FINITE", "finite")]
+    [InlineData(" f32:7FC00001", "GAMEZ_FINITE", "finite")]
+    [InlineData(" invalid", "GAMEZ_TYPE", "FLOAT")]
+    [InlineData(" (4.0)", "GAMEZ_TYPE", "FLOAT")]
+    [InlineData(" 4.0 5.0", "GAMEZ_ARITY", "9 or 10")]
     public void InvalidPauseOrExcessOperandsFailEditorAndBothCompilationPaths(string tail, string code, string message)
     {
         string text = Source(tail);
         var doc = RecoilLanguage.Analyze("vehicle.zrd", text, TestContext.Current.CancellationToken);
         var error = Assert.Single(doc.Diagnostics, d => d.Code == code && d.Severity == "error");
         Assert.Contains(message, error.Message);
-        if (code != "RECOIL_ARITY") Assert.Equal(text.IndexOf(tail, StringComparison.Ordinal) + 1, error.Span.Start);
+        if (code != "GAMEZ_ARITY") Assert.Equal(text.IndexOf(tail, StringComparison.Ordinal) + 1, error.Span.Start);
         foreach (bool binary in new[] { false, true })
         {
             var ex = Assert.Throws<InvalidDataException>(() => Build(text, binary: binary));
@@ -114,7 +114,7 @@ public sealed class VehicleBeamPauseTests
     public void FewerThanNineStillFailsAndOtherResourceRowsRemainGeneric()
     {
         string text = Source().Replace("325.0 0 1", "325.0 0", StringComparison.Ordinal);
-        Assert.Contains(RecoilLanguage.Analyze("vehicle.zrd", text, TestContext.Current.CancellationToken).Diagnostics, d => d.Code == "RECOIL_ARITY");
+        Assert.Contains(RecoilLanguage.Analyze("vehicle.zrd", text, TestContext.Current.CancellationToken).Diagnostics, d => d.Code == "GAMEZ_ARITY");
         Assert.Throws<InvalidDataException>(() => Build(text));
         Assert.NotEmpty(Build(Source(" 4 5"), "custom.zrd").Bytes);
     }
@@ -166,7 +166,7 @@ public sealed class VehicleBeamPauseTests
     public void GroupingWrappersAndUnpairedStringsCannotBypassCompilationRules(string template)
     {
         string text = template.Replace("ROW", Nine + " 4", StringComparison.Ordinal);
-        Assert.Contains(RecoilLanguage.Analyze("vehicle.zrd", text, TestContext.Current.CancellationToken).Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Contains(RecoilLanguage.Analyze("vehicle.zrd", text, TestContext.Current.CancellationToken).Diagnostics, d => d.Code == "GAMEZ_TYPE");
         foreach (bool binary in new[] { false, true })
             Assert.Contains("FLOAT", Assert.Throws<InvalidDataException>(() => Build(text, binary: binary)).Message);
         var document = FormatRegistry.Default.OpenBytes("vehicle.zrd", Encoding.Latin1.GetBytes(text), token: TestContext.Current.CancellationToken);

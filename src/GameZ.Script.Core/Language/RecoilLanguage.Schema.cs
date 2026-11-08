@@ -78,7 +78,8 @@ public static partial class RecoilLanguage
         if (Has("NEW_GAME_START") || Has("LOAD_GAME_START")) return "startanims";
         if (doc.Records.Any(r => r.Parent == null && r.Key is "TYPEI" or "TYPEII")) return "hud";
         if (Has("FONTS")) return "fonts";
-        if (doc.Records.Any(r => r.Key.StartsWith("node_", StringComparison.Ordinal) && r.Value?.Kind == ZrdKind.Array)) return "network";
+        if (doc.Records.Any(r => r.Parent == null && r.Key.StartsWith("node_", StringComparison.Ordinal)
+            && r.Key.Length > 5 && r.Key.AsSpan(5).IndexOfAnyExceptInRange('0', '9') < 0 && r.Value?.Kind == ZrdKind.Array)) return "network";
         string file = System.IO.Path.GetFileNameWithoutExtension(doc.Path).ToLowerInvariant();
         var body = doc.Root!; while (body.Children.Count == 1 && body.Children[0].Kind == ZrdKind.Array && body.Children[0].Children.FirstOrDefault()?.Kind == ZrdKind.Array) body = body.Children[0];
         if (file is "aiv" or "aiv_easy" or "aiv_hard" && doc.Records.Any(r => r.Parent == null && r.Value?.Kind == ZrdKind.Array && r.Values.Count == 3 && r.Values[1].Kind == ZrdKind.Array)) return "placements";
@@ -106,17 +107,17 @@ public static partial class RecoilLanguage
             }
             if (doc.Family == "weather" && IsWeatherScalar(record.Key) && record.Value.Kind == ZrdKind.Array)
             {
-                doc.Report("RECOIL_TYPE", "error", $"Weather {record.Key} requires a bare scalar value, without parentheses around the value.", doc.Span(record.Value));
+                doc.Report("GAMEZ_TYPE", "error", $"Weather {record.Key} requires a bare scalar value, without parentheses around the value.", doc.Span(record.Value));
                 continue;
             }
             if (doc.Family == "ui" && IsBareWidgetInteger(record.Key) && record.Value.Kind == ZrdKind.Array)
             {
-                doc.Report("RECOIL_TYPE", "error", $"{record.Key} requires a bare integer, without parentheses around the value.", doc.Span(record.Value));
+                doc.Report("GAMEZ_TYPE", "error", $"{record.Key} requires a bare integer, without parentheses around the value.", doc.Span(record.Value));
                 continue;
             }
             if (doc.Family == "sounds" && Ancestors(record.Parent).Contains("SOUND_GROUPS") && field.Shape == "n" && record.Value.Kind == ZrdKind.Array)
             {
-                doc.Report("RECOIL_TYPE", "error", $"{record.Key} requires a bare number, without parentheses around the value.", doc.Span(record.Value));
+                doc.Report("GAMEZ_TYPE", "error", $"{record.Key} requires a bare number, without parentheses around the value.", doc.Span(record.Value));
                 continue;
             }
             if (doc.Family == "animation" && record.Key == "ACTIVATION" && record.Parent?.Key == "SEQUENCE_DEFINITION" && record.FirstText != "ON_CALL")
@@ -224,7 +225,7 @@ public static partial class RecoilLanguage
         int required = expected.Count(s => s != "..." && !s.EndsWith('?'));
         bool extra = expected[^1] == "...";
         if (actual.Count < required || !extra && actual.Count > expected.Length)
-        { doc.Report("RECOIL_ARITY", "error", $"{record.Key} expects {ReadableShape(shape)}; found {actual.Count} values.", doc.Span(record.Value!)); return; }
+        { doc.Report("GAMEZ_ARITY", "error", $"{record.Key} expects {ReadableShape(shape)}; found {actual.Count} values.", doc.Span(record.Value!)); return; }
         for (int i = 0; i < actual.Count && i < expected.Length && expected[i] != "..."; i++)
         {
             var value = actual[i]; char kind = expected[i][0];
@@ -234,16 +235,17 @@ public static partial class RecoilLanguage
                 string explanation = kind == 'f' && value.Kind == ZrdKind.Int
                     ? $"a float; {Numeric(value)} is an integer. Use {Numeric(value)}.0"
                     : kind == 'f' ? "a float (for example 10.0)" : kind == 'i' ? "an integer" : kind == 'n' ? "a number" : kind == 'a' ? "an array" : "a string";
-                doc.Report("RECOIL_TYPE", "error", $"{record.Key} value {i + 1} requires {explanation}.", doc.Span(value));
+                doc.Report("GAMEZ_TYPE", "error", $"{record.Key} value {i + 1} requires {explanation}.", doc.Span(value));
             }
-            else if (kind is 'f' or 'n' && Numeric(value) is double n && !double.IsFinite(n)) doc.Report("RECOIL_FINITE", "error", $"{record.Key} requires a finite number.", doc.Span(value));
+            else if (kind is 'f' or 'n' && Numeric(value) is double n && !double.IsFinite(n)) doc.Report("GAMEZ_FINITE", "error", $"{record.Key} requires a finite number.", doc.Span(value));
         }
     }
     private static void ValidateNetwork(LanguageDocument doc)
     {
-        foreach (var group in doc.Records.Where(r => r.Key.StartsWith("node_", StringComparison.Ordinal) && r.Value?.Kind == ZrdKind.Array).GroupBy(r => r.Parent))
+        foreach (var group in doc.Records.Where(r => r.Parent == null && r.Key.StartsWith("node_", StringComparison.Ordinal) && r.Value?.Kind == ZrdKind.Array).GroupBy(r => r.Parent))
         {
-            bool Eligible(LanguageRecord r) => r.Key.Length == 7 && int.TryParse(r.Key.AsSpan(5), out int index) && index is >= 0 and <= 98;
+            bool Eligible(LanguageRecord r) => r.Key.Length == 7 && r.Key.AsSpan(5).IndexOfAnyExceptInRange('0', '9') < 0
+                && int.TryParse(r.Key.AsSpan(5), out int index) && index is >= 0 and <= 98;
             bool Spatial(LanguageRecord r) => r.Values.Count == 3 && r.Values[0].Kind == ZrdKind.Int
                 && r.Values[1].Kind == ZrdKind.Array && r.Values[1].Children.Count == 3 && r.Values[1].Children.All(n => n.Kind == ZrdKind.Float)
                 && r.Values[2].Kind == ZrdKind.Array && r.Values[2].Children.Count == 3 && r.Values[2].Children.All(n => n.Kind == ZrdKind.Int);
@@ -254,7 +256,7 @@ public static partial class RecoilLanguage
                 // Spatial records are distinct from interleaved valve/constraint records.
                 if (node.Values.Count != 3 || node.Values[1].Kind != ZrdKind.Array || node.Values[2].Kind != ZrdKind.Array)
                 { doc.Report("RECOIL_NODE_SHAPE", "error", "Spatial node expects an unused integer, an XYZ float tuple, and three integer links. Its index comes from its name.", doc.Span(node.Value!)); continue; }
-                if (node.Values[0].Kind != ZrdKind.Int) doc.Report("RECOIL_TYPE", "error", "Spatial node's unused first value must be a stored integer.", doc.Span(node.Values[0]));
+                if (node.Values[0].Kind != ZrdKind.Int) doc.Report("GAMEZ_TYPE", "error", "Spatial node's unused first value must be a stored integer.", doc.Span(node.Values[0]));
                 CheckShape(doc, node with { Value = node.Values[1] }, "f f f");
                 CheckShape(doc, node with { Value = node.Values[2] }, "i i i");
                 foreach (var link in node.Values[2].Children.Where(n => n.Kind == ZrdKind.Int))

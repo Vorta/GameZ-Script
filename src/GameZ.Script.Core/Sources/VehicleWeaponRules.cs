@@ -16,7 +16,7 @@ internal static class VehicleWeaponRules
         string owner = "Vehicle " + JsonData.ShownText(vehicle, 256) + " weapons";
         if (list.Kind != ZrdKind.Array)
         {
-            yield return new(list, "RECOIL_TYPE", owner + " requires an array of weapon entries.");
+            yield return new(list, "GAMEZ_TYPE", owner + " requires an array of weapon entries.");
             yield break;
         }
         for (int i = 0; i < list.Children.Count; i++)
@@ -26,7 +26,7 @@ internal static class VehicleWeaponRules
             string context = owner + " row " + (i + 1);
             if (row.Kind != ZrdKind.Array || row.Children.Count is < 9 or > 10)
             {
-                yield return new(row, "RECOIL_ARITY", context + " requires 9 or 10 values.");
+                yield return new(row, "GAMEZ_ARITY", context + " requires 9 or 10 values.");
                 continue;
             }
             if (row.Children.Count == 9) continue;
@@ -36,13 +36,13 @@ internal static class VehicleWeaponRules
                 string help = pause.Kind == ZrdKind.Int
                     ? " Use " + unchecked((int)pause.Bits).ToString(System.Globalization.CultureInfo.InvariantCulture) + ".0 instead."
                     : " Use a float such as 4.0.";
-                yield return new(pause, "RECOIL_TYPE", context + " beam pause (value 10) requires a FLOAT reader node (type 2)." + help);
+                yield return new(pause, "GAMEZ_TYPE", context + " beam pause (value 10) requires a FLOAT reader node (type 2)." + help);
                 continue;
             }
             float seconds = BitConverter.UInt32BitsToSingle(pause.Bits);
             if (!float.IsFinite(seconds))
             {
-                yield return new(pause, "RECOIL_FINITE", context + " beam pause must be finite.");
+                yield return new(pause, "GAMEZ_FINITE", context + " beam pause must be finite.");
                 continue;
             }
             if (seconds < 0)

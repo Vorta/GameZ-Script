@@ -1,12 +1,13 @@
 using System.Text.Json.Nodes;
 using StreamJsonRpc;
+using GameZ.Script.Core;
 using GameZ.Script.Core.Language;
 using GameZ.Script.Core.Sources;
 
 namespace GameZ.Script.LanguageServer;
 
 /// <summary>Thin LSP transport. Every language decision belongs to the shared Core analysis.</summary>
-public sealed class GameZLanguageServer : IDisposable
+public sealed partial class GameZLanguageServer : IDisposable
 {
     private sealed record Buffer(string Uri, string Path, string Text, int Version);
     private readonly Lock gate = new();
@@ -15,6 +16,10 @@ public sealed class GameZLanguageServer : IDisposable
     private readonly SemaphoreSlim analysisGate = new(1);
     private readonly SemaphoreSlim missionGate = new(1);
     private readonly List<string> folders = [];
+    private readonly Dictionary<string, string> dialects = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (long Revision, GameVariant? Game)> games = new(StringComparer.OrdinalIgnoreCase);
+    private string defaultDialect = "auto";
+    private long identityRevision;
     private readonly HashSet<string> published = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource pending = new();
     private bool trusted, stopped;
@@ -27,6 +32,7 @@ public sealed class GameZLanguageServer : IDisposable
         lock (gate)
         {
             trusted = args["initializationOptions"]?["trusted"]?.GetValue<bool>() == true;
+            ReadDialects(args["initializationOptions"]);
             if (args["workspaceFolders"] is JsonArray ws) foreach (var folder in ws) AddFolder(folder?["uri"]?.GetValue<string>());
             else AddFolder(args["rootUri"]?.GetValue<string>());
         }
@@ -42,7 +48,7 @@ public sealed class GameZLanguageServer : IDisposable
                 executeCommandProvider = new { commands = new[] { "gamez.server.validateProject" } },
                 workspace = new { workspaceFolders = new { supported = true, changeNotifications = true } }
             },
-            serverInfo = new { name = "GameZ Script", version = "1.3.0" }
+            serverInfo = new { name = "GameZ Script", version = "1.4.0" }
         };
     }
     [JsonRpcMethod("initialized", UseSingleObjectParameterDeserialization = true)] public void Initialized(JsonObject _) { }
@@ -70,7 +76,18 @@ public sealed class GameZLanguageServer : IDisposable
         if (Rpc != null) await Rpc.NotifyWithParameterObjectAsync("textDocument/publishDiagnostics", new { uri, diagnostics = Array.Empty<object>() });
     }
     [JsonRpcMethod("textDocument/didSave", UseSingleObjectParameterDeserialization = true)] public void Save(JsonObject _) { lock (gate) Invalidate(); }
-    [JsonRpcMethod("workspace/didChangeWatchedFiles", UseSingleObjectParameterDeserialization = true)] public void FilesChanged(JsonObject _) { lock (gate) Invalidate(); }
+    [JsonRpcMethod("workspace/didChangeWatchedFiles", UseSingleObjectParameterDeserialization = true)] public void FilesChanged(JsonObject _) { lock (gate) { identityRevision++; Invalidate(); } }
+    [JsonRpcMethod("workspace/didChangeConfiguration", UseSingleObjectParameterDeserialization = true)]
+    public void ConfigurationChanged(JsonObject args) { lock (gate) { ReadDialects(args["settings"]); identityRevision++; Invalidate(); } }
+    private void ReadDialects(JsonNode? settings)
+    {
+        defaultDialect = settings?["gamez"]?["dialect"]?.GetValue<string>() ?? settings?["dialect"]?.GetValue<string>() ?? "auto";
+        dialects.Clear();
+        if (settings?["dialects"] is JsonArray rows)
+            foreach (var row in rows.Take(128))
+                if (Local(row?["uri"]?.GetValue<string>()) is { } path)
+                    dialects[path] = row?["dialect"]?.GetValue<string>() ?? "auto";
+    }
     [JsonRpcMethod("workspace/didChangeWorkspaceFolders", UseSingleObjectParameterDeserialization = true)]
     public void FoldersChanged(JsonObject args)
     {
@@ -78,6 +95,7 @@ public sealed class GameZLanguageServer : IDisposable
         {
             if (args["event"]?["removed"] is JsonArray removed) foreach (var f in removed) if (Local(f?["uri"]?.GetValue<string>()) is { } path) folders.RemoveAll(p => p.Equals(path, StringComparison.OrdinalIgnoreCase));
             if (args["event"]?["added"] is JsonArray added) foreach (var f in added) AddFolder(f?["uri"]?.GetValue<string>());
+            identityRevision++;
             Invalidate();
         }
     }
@@ -100,8 +118,9 @@ public sealed class GameZLanguageServer : IDisposable
         {
             _ = NotifyEmpty(uri); published.Remove(uri);
         }
-        generation++; projects.Clear(); pending.Cancel(); pending.Dispose(); pending = new();
+        generation++; projects.Clear(); sourceGames.Clear(); pending.Cancel(); pending.Dispose(); pending = new();
         var cancellation = pending.Token; long revision = generation;
+        _ = NotifyProfileChanged();
         _ = Background(revision, cancellation);
     }
     private async Task NotifyEmpty(string uri)
@@ -117,11 +136,12 @@ public sealed class GameZLanguageServer : IDisposable
             Buffer[] opened; lock (gate) opened = buffers.Values.ToArray();
             foreach (var buffer in opened)
             {
-                var local = await Task.Run(() => RecoilLanguage.Analyze(buffer.Path, buffer.Text, token), token);
+                var local = await Task.Run(() => RecoilLanguage.AnalyzeResolved(buffer.Path, buffer.Text, Game(buffer.Path, token), token), token);
                 await Publish(buffer, local, revision, token);
             }
             foreach (string root in opened.Select(b => Root(b.Path)).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase))
             {
+                if (Game(Path.Combine(root, "gamegen", "profile.gs"), token) == null) continue;
                 var project = await Project(root, false, revision, token, true);
                 foreach (var buffer in opened.Where(b => Root(b.Path)?.Equals(root, StringComparison.OrdinalIgnoreCase) == true))
                     if (project.Documents.TryGetValue(SourceProject.Relative(root, buffer.Path), out var doc)) await Publish(buffer, doc, revision, token);
@@ -137,7 +157,7 @@ public sealed class GameZLanguageServer : IDisposable
                 foreach (var buffer in opened)
                 {
                     if (token.IsCancellationRequested) break;
-                    var local = RecoilLanguage.Analyze(buffer.Path, buffer.Text, token);
+                    var local = RecoilLanguage.AnalyzeResolved(buffer.Path, buffer.Text, Game(buffer.Path, token), token);
                     await PublishIncomplete(buffer, local, revision, ex.Message, token);
                 }
             }
@@ -178,9 +198,12 @@ public sealed class GameZLanguageServer : IDisposable
             lock (gate)
             {
                 if (!deep && projects.TryGetValue(root, out var cached) && cached.Generation == revision && (cached.Missions || !missions)) return cached.Project;
-                overlay = buffers.Values.Where(b => Under(b.Path, root)).ToDictionary(b => SourceProject.Relative(root, b.Path), b => b.Text, StringComparer.OrdinalIgnoreCase);
+                overlay = buffers.Values.Where(b => Root(b.Path)?.Equals(root, StringComparison.OrdinalIgnoreCase) == true).ToDictionary(b => SourceProject.Relative(root, b.Path), b => b.Text, StringComparer.OrdinalIgnoreCase);
             }
-            var project = await Task.Run(() => LanguageProject.Analyze(root, overlay, deep, token, missionAnalysis: missions || deep), token);
+            var game = Game(Path.Combine(root, "gamegen", "profile.gs"), token)
+                ?? throw new InvalidOperationException("Game is unknown. Use GameZ Script: Select Game to choose MW3 or RECOIL before validating this project.");
+            var project = await Task.Run(() => LanguageProject.Analyze(root, overlay, deep, token, missionAnalysis: missions || deep,
+                game: game), token);
             lock (gate) if (generation == revision && (!projects.TryGetValue(root, out var ready) || ready.Generation != revision || !ready.Missions || missions || deep)) projects[root] = (revision, project, missions || deep);
             return project;
         }
@@ -207,6 +230,9 @@ public sealed class GameZLanguageServer : IDisposable
         token = linked.Token;
         LanguageProject? project = null;
         string? root = contextualAnalysis ? Root(buffer.Path) : null;
+        // A decisive active document can still work locally when the owning project's
+        // identity scan is incomplete. Context requires a project-wide identity.
+        if (root != null && Game(Path.Combine(root, "gamegen", "profile.gs"), token) == null) root = null;
         if (root != null)
         {
             try
@@ -217,7 +243,7 @@ public sealed class GameZLanguageServer : IDisposable
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { await Console.Error.WriteLineAsync(ex.Message); }
         }
-        var doc = project != null && project.Documents.TryGetValue(SourceProject.Relative(root!, buffer.Path), out var contextual) ? contextual : RecoilLanguage.Analyze(buffer.Path, buffer.Text, token);
+        var doc = project != null && project.Documents.TryGetValue(SourceProject.Relative(root!, buffer.Path), out var contextual) ? contextual : RecoilLanguage.AnalyzeResolved(buffer.Path, buffer.Text, Game(buffer.Path, token), token);
         token.ThrowIfCancellationRequested();
         lock (gate) if (generation != revision) throw new OperationCanceledException("Source buffer changed during language request.");
         return (doc, project, Offset(buffer.Text, args["position"]));
@@ -275,12 +301,14 @@ public sealed class GameZLanguageServer : IDisposable
     public async Task<object?> Hover(JsonObject args, CancellationToken token)
     {
         var (doc, _, offset) = await Document(args, token, false); var hover = RecoilLanguage.Hover(doc, offset);
+        CheckCurrent(doc, token);
         return hover == null ? null : new { contents = new { kind = "markdown", value = hover.Markdown }, range = Range(doc.Text, hover.Span) };
     }
     [JsonRpcMethod("textDocument/documentSymbol", UseSingleObjectParameterDeserialization = true)]
     public async Task<object> Symbols(JsonObject args, CancellationToken token)
     {
         var (doc, _, _) = await Document(args, token, false);
+        CheckCurrent(doc, token);
         object Convert(LanguageSymbol symbol) => new { name = symbol.Name, kind = symbol.Kind == "class" ? 5 : 7, range = Range(doc.Text, symbol.Span), selectionRange = Range(doc.Text, symbol.Selection), children = symbol.Children.Select(Convert).ToArray() };
         return doc.Symbols.Select(Convert).ToArray();
     }
@@ -292,7 +320,7 @@ public sealed class GameZLanguageServer : IDisposable
         return project.Definition(doc.Path, offset).DistinctBy(location => (location.Path.ToLowerInvariant(), location.Span)).Select(location => new
         {
             uri = new Uri(SourceProject.Resolve(project.Root, location.Path)).AbsoluteUri,
-            range = Range(project.Documents.TryGetValue(location.Path, out var target) ? target.Text : "", location.Span)
+            range = project.TargetLineStarts(location.Path) is { } lines ? IndexedRange(lines, location.Span) : Range(project.TargetText(location.Path) ?? "", location.Span)
         }).ToArray();
     }
     [JsonRpcMethod("workspace/executeCommand", UseSingleObjectParameterDeserialization = true)]
@@ -304,13 +332,14 @@ public sealed class GameZLanguageServer : IDisposable
         long revision; CancellationToken contextToken; lock (gate) { revision = generation; contextToken = pending.Token; }
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, contextToken); token = linked.Token;
         var project = await Project(root, true, revision, token);
-        foreach (var doc in project.Documents.Values)
+        foreach (var doc in project.ValidationDocuments)
         {
             Task? notice;
             lock (gate)
             {
                 token.ThrowIfCancellationRequested();
                 if (generation != revision) throw new OperationCanceledException("Sources changed during validation.");
+                if (Root(SourceProject.Resolve(root, doc.Path))?.Equals(root, StringComparison.OrdinalIgnoreCase) != true) continue;
                 string uri = new Uri(SourceProject.Resolve(root, doc.Path)).AbsoluteUri;
                 published.Add(uri);
                 int? version = buffers.GetValueOrDefault(uri)?.Version;
@@ -318,7 +347,22 @@ public sealed class GameZLanguageServer : IDisposable
             }
             if (notice != null) await notice;
         }
-        return new { files = project.Documents.Count, errors = project.Documents.Values.Sum(d => d.Diagnostics.Count(x => x.Severity == "error")), warnings = project.Documents.Values.Sum(d => d.Diagnostics.Count(x => x.Severity == "warning")) };
+        lock (gate)
+        {
+            token.ThrowIfCancellationRequested();
+            if (generation != revision) throw new OperationCanceledException("Sources changed during validation.");
+        }
+        return new { files = project.CheckedFileCount, errors = project.ValidationDocuments.Sum(d => d.Diagnostics.Count(x => x.Severity == "error")), warnings = project.ValidationDocuments.Sum(d => d.Diagnostics.Count(x => x.Severity == "warning")) };
+    }
+    private static object IndexedRange(IReadOnlyList<int> lines, TextSpan span)
+    {
+        object At(int offset)
+        {
+            int lo = 0, hi = lines.Count - 1;
+            while (lo < hi) { int mid = lo + (hi - lo + 1) / 2; if (lines[mid] <= offset) lo = mid; else hi = mid - 1; }
+            return new { line = lo, character = Math.Max(0, offset - lines[lo]) };
+        }
+        return new { start = At(span.Start), end = At(span.End) };
     }
     private static object[] Diagnostics(LanguageDocument doc) => doc.Diagnostics.Select(d => (object)new
     {

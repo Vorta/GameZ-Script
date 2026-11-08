@@ -49,6 +49,8 @@ public sealed partial class AnimationCompiler
     private readonly long maximumBytes;
     private readonly long maximumExpansionWork;
     private readonly AnimationCompileWork keyframeWork;
+    private readonly GameVariant game;
+    private uint Version => game == GameVariant.MechWarrior3 ? 39u : 28u;
     private long bytes, expansionWork;
     // Four maximum-sized fallback scripts, at 256 conservatively estimated bytes per retained key.
     internal const int MaximumScriptKeys = 4 * AnimationScript.MaximumTotalKeys;
@@ -59,9 +61,10 @@ public sealed partial class AnimationCompiler
     private void Warn(string message) => diagnostics.Add($"{message}");
     private void Reject(string message) { engineRejection ??= message; Warn(message); }
 
-    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork)
+    private AnimationCompiler(AnimationDefinitionSet definitions, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token, long maximumExpansionWork, AnimationCompileWork keyframeWork, GameVariant game)
     {
-        this.definitions = definitions; roots = new(worldNodes, token); this.token = token; this.maximumBytes = maximumBytes;
+        this.game = game;
+        this.definitions = definitions; roots = new(worldNodes, token, game: game); this.token = token; this.maximumBytes = maximumBytes;
         this.maximumExpansionWork = maximumExpansionWork;
         this.keyframeWork = keyframeWork;
         nodeSet = worldNodes == null ? null : new(worldNodes, StringComparer.Ordinal);
@@ -81,14 +84,20 @@ public sealed partial class AnimationCompiler
     /// effects.zrd defines (see <see cref="EffectNames"/>): the game rejects the whole file when one does not resolve.
     /// </summary>
     public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, CancellationToken token = default)
-        => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
+        => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token, game: files.Game);
+
+    public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, GameVariant game, CancellationToken token = default)
+        => Compile(files, root, worldNodes, null, FormatRegistry.MaximumDocumentBytes, token, game: game);
+
+    public static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, GameVariant game, CancellationToken token = default)
+        => Compile(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token, game: game);
 
     internal static Result Compile(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes, IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, GameVariant game = GameVariant.Recoil)
     {
         var evaluated = Evaluate(files, root, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings);
+            maximumKeyframeWork, keyframeWorkAdmitted, captureSourceBindings, game);
         byte[] bytes = AnimationWriter.Write(evaluated.Package, token);
         return new(bytes, AnimationPackage.Read(bytes, token), evaluated.Warnings, evaluated.Inputs)
         { EngineRejection = evaluated.EngineRejection, SourceBindings = evaluated.SourceBindings };
@@ -96,8 +105,8 @@ public sealed partial class AnimationCompiler
 
     /// <summary>Evaluates source definitions for editing and preview, without producing an animation archive.</summary>
     public static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
-        IReadOnlyCollection<string>? effects = null, CancellationToken token = default)
-        => Evaluate(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token);
+        IReadOnlyCollection<string>? effects = null, CancellationToken token = default, GameVariant? game = null)
+        => Evaluate(files, root, worldNodes, effects, FormatRegistry.MaximumDocumentBytes, token, game: game ?? files.Game);
 
     public sealed record Evaluation(AnimationPackage Package, IReadOnlyList<string> Warnings, IReadOnlyList<string> Inputs)
     {
@@ -113,11 +122,11 @@ public sealed partial class AnimationCompiler
     internal static Evaluation Evaluate(IProjectFiles files, string root, IReadOnlyCollection<string>? worldNodes,
         IReadOnlyCollection<string>? effects, long maximumBytes, CancellationToken token,
         long maximumExpansionWork = MaximumExpansionWork, long maximumKeyframeWork = AnimationCompileWork.MaximumUnits,
-        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false)
+        Action? keyframeWorkAdmitted = null, bool captureSourceBindings = false, GameVariant game = GameVariant.Recoil)
     {
-        var set = AnimationDefinitionSet.Load(files, root, token);
+        var set = AnimationDefinitionSet.Load(files, root, game, token);
         AnimationCompiler compiler = new(set, worldNodes, effects, maximumBytes, token, maximumExpansionWork,
-            new(token, maximumKeyframeWork, keyframeWorkAdmitted));
+            new(token, maximumKeyframeWork, keyframeWorkAdmitted), game);
         if (captureSourceBindings)
         {
             compiler.sourceBindings = [];
@@ -216,8 +225,10 @@ public sealed partial class AnimationCompiler
         private readonly List<AnimationScript.Key>? loose;
         private readonly CancellationToken token;
         private readonly AnimationCompileWork work;
-        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey, AnimationCompileWork work)
+        private readonly bool native;
+        public Script(string path, byte[] bytes, CancellationToken token, Action reserveKey, AnimationCompileWork work, bool native)
         {
+            this.native = native;
             this.token = token;
             this.work = work;
             Path = path;
@@ -230,13 +241,13 @@ public sealed partial class AnimationCompiler
         public bool Moves(string name) => si != null ? si.Track(name, token, work) != null : objects.ContainsKey(name) || loose != null;
         /// <summary>The node's keyframes at <paramref name="frameRate"/> frames per second.</summary>
         public List<AnimationKeyframe> Compile(string name, float frameRate, string source, CancellationToken token) => si != null
-            ? SiAnimationScript.Compile(si, name, frameRate, source, token, work)
+            ? SiAnimationScript.Compile(si, name, frameRate, source, token, work, native)
             : AnimationScript.Compile(objects.GetValueOrDefault(name) ?? loose!, frameRate, source, token, work);
     }
     private Script? ReadScript(string name, string from)
     {
         if (scripts.TryGetValue((name, from), out var cached)) return cached;
-        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey, keyframeWork) : null;
+        Script? script = definitions.ReadScript(name, from) is { } file ? new(file.Path, file.Bytes, token, ReserveKey, keyframeWork, game == GameVariant.MechWarrior3) : null;
         scripts[(name, from)] = script;
         return script;
 
@@ -268,10 +279,11 @@ public sealed partial class AnimationCompiler
             }
         }
         // Prefix: signature, version, no source stamps, then the global state (entry count, default gravity).
-        byte[] prefix = new byte[12 + 60];
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), 28);
+        byte[] prefix = new byte[12 + (Version == 39 ? 68 : 60)];
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, 0x08170616); BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(4), Version);
         BinaryPrimitives.WriteUInt32LittleEndian(prefix.AsSpan(12 + 8), (uint)entries.Count << 16);
         BinaryPrimitives.WriteSingleLittleEndian(prefix.AsSpan(12 + 0x1C), definitions.Gravity);
+        if (Version == 39) BinaryPrimitives.WriteInt32LittleEndian(prefix.AsSpan(12 + 0x3C), 1);
         foreach (var entry in entries) CompleteHeaders(entry);
         AnimationPackage package = new() { Prefix = prefix, Tail = [] };
         package.Entries.AddRange(entries);
@@ -296,16 +308,17 @@ public sealed partial class AnimationCompiler
             }
             BinaryPrimitives.WriteInt32LittleEndian(sequence.Bytes.AsSpan(60), length);
         }
-        entry.Primary.Bytes.CopyTo(entry.Bytes.AsSpan(196));
+        if (Version == 39) entry.Bytes[268] = checked((byte)entry.Puffers.Count);
+        entry.Primary.Bytes.CopyTo(entry.Bytes.AsSpan(Version == 39 ? 200 : 196));
         entry.OriginalPrimaryHeader = (byte[])entry.Primary.Bytes.Clone();
     }
 
     private static string Name(AnimationItem definition) => definition.TextOf("ANIMATION_NAME") ?? definition.TextOf("NAME") ?? "(unnamed)";
 
     /// <summary>The engine skips entry 0; the original compiler wrote it blank with the on-call activation mode.</summary>
-    private static AnimationEntry Placeholder()
+    private AnimationEntry Placeholder()
     {
-        byte[] header = new byte[HeaderSize]; header[153] = 3;
+        byte[] header = new byte[Version == 39 ? 316 : HeaderSize]; header[153] = 3;
         return new(header, 0, -1) { Primary = new(new byte[64]) };
     }
 
@@ -319,8 +332,8 @@ public sealed partial class AnimationCompiler
     /// other names.
     /// </summary>
     private IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition) => roots.Resolve(definition, Warn);
-    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> warn, CancellationToken token = default)
-        => new AnimationRoots(worldNodes, token).Resolve(definition, warn);
+    internal static IEnumerable<(string Root, string Digits)> Roots(AnimationItem definition, IReadOnlyCollection<string>? worldNodes, Action<string> warn, CancellationToken token = default, GameVariant game = GameVariant.Recoil)
+        => new AnimationRoots(worldNodes, token, game: game).Resolve(definition, warn);
 
     /// <summary>A pattern's stars replaced, in order, by the digits its root matched.</summary>
     internal static string Bind(string text, string digits)
@@ -330,6 +343,17 @@ public sealed partial class AnimationCompiler
         foreach (char c in text) result.Append(c == '*' && d < digits.Length ? digits[d++] : c);
         return result.ToString();
     }
+
+    internal static string BoundName(string text, string digits, GameVariant game)
+    {
+        if (game != GameVariant.MechWarrior3) return Bind(text, digits);
+        string number = digits.Split('#')[0]; int width = text.Count(c => c == '*');
+        return Bind(text, number.PadLeft(width, '0')).Replace('*', '0');
+    }
+
+    internal static string EntryName(AnimationItem definition, string root, string digits, GameVariant game)
+        => BoundName(definition.TextOf("ANIMATION_NAME") ?? root, digits, game)
+            + (game == GameVariant.MechWarrior3 && digits.IndexOf('#') is int hash and >= 0 ? digits[hash..] : "");
 
     internal bool NodeExists(string name) => nodeSet == null || nodeSet.Contains(name);
     internal bool EffectExists(string name) => effectSet == null || effectSet.Contains(name);

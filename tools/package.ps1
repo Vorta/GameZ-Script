@@ -21,11 +21,11 @@ try {
         npm run package
         if ($LASTEXITCODE -ne 0) { throw 'VSIX packaging failed.' }
     } finally { Pop-Location }
-    $package = Join-Path $repository 'artifacts/gamez-script-1.3.0-win32-x64.vsix'
+    $package = Join-Path $repository 'artifacts/gamez-script-1.4.0-win32-x64.vsix'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($package)
     try {
-        foreach ($required in @('extension/package.json','extension/dist/extension.js','extension/server/GameZ.Script.LanguageServer.exe','extension/LICENSE.txt','extension/THIRD-PARTY-NOTICES.md','extension/readme.md')) {
+        foreach ($required in @('extension/package.json','extension/dist/extension.js','extension/server/GameZ.Script.LanguageServer.exe','extension/LICENSE.txt','extension/THIRD-PARTY-NOTICES.md','extension/readme.md','extension/syntaxes/animation.tmLanguage.json','extension/animation-language-configuration.json')) {
             if (!$zip.GetEntry($required)) { throw "VSIX is missing $required" }
         }
         if (@($zip.Entries | Where-Object { $_.FullName -match '(^|/)(node_modules|data|gamegen|test|src)/' }).Count) { throw 'VSIX contains development files or project data.' }

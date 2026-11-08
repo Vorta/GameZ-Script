@@ -10,13 +10,16 @@ public sealed partial class LanguageProject
     private static GameGenScriptLine? ScriptLine(LanguageDocument doc, int number) =>
         doc.Script is { } script && number > 0 && number <= script.Lines.Count ? script.Lines[number - 1] : null;
     private readonly Dictionary<(string Path, int Start), HashSet<string>> scriptChoices = [];
+    private readonly Dictionary<(string Path, int Start), List<IReadOnlyList<string>>> sharedScriptChoices = [];
+    private readonly Dictionary<int, List<IReadOnlyList<string>>> nativeChoiceSets = [];
     private long assistanceUnits;
     private bool assistanceLimited;
     private readonly Dictionary<(string Path, int Start), int> scriptReferenceLengths = [];
     private void ScriptLink(string path, TextSpan span, LanguageLocation location)
     {
-        if (!AdmitAssistance(path, span, 128L + location.Path.Length)) return;
         var key = (path, span.Start);
+        if (definitions.TryGetValue(key, out var previous) && (previous.Count >= RecoilLanguage.MaximumResults || previous.Contains(location))) return;
+        if (!AdmitAssistance(path, span, 128L + location.Path.Length)) return;
         scriptReferenceLengths[key] = span.Length;
         if (!definitions.TryGetValue(key, out var list)) definitions[key] = list = [];
         if (list.Count < RecoilLanguage.MaximumResults && !list.Contains(location)) list.Add(location);
@@ -26,12 +29,30 @@ public sealed partial class LanguageProject
         if (assistanceLimited) return false;
         if ((assistanceUnits += units) <= 2_000_000) return true;
         assistanceLimited = true;
-        documents[path].Report("RECOIL_LIMIT", "information", "Project assistance budget exceeded; further references and suggestions omitted.", span);
+        (documents.GetValueOrDefault(path) ?? validationDocuments.GetValueOrDefault(path))?.Report("GAMEZ_LIMIT", "information", "Project assistance budget exceeded; further references and suggestions omitted.", span);
         return false;
     }
     private void Choices(string path, TextSpan span, IEnumerable<string> values)
     {
         if (assistanceLimited) return;
+        if (Game == GameVariant.MechWarrior3)
+        {
+            // Common includes run in several campaigns. Preserve one immutable catalog for each
+            // distinct model/include/macro candidate set instead of copying it into every operand.
+            string[] candidates = values.Take(MaximumReferenceNames).Distinct(StringComparer.Ordinal).ToArray();
+            var hash = new HashCode(); foreach (string candidate in candidates) hash.Add(candidate, StringComparer.Ordinal);
+            int id = hash.ToHashCode();
+            if (!nativeChoiceSets.TryGetValue(id, out var sets)) nativeChoiceSets[id] = sets = [];
+            var match = sets.FirstOrDefault(s => s.SequenceEqual(candidates, StringComparer.Ordinal));
+            if (match == null)
+            {
+                long units = 32L + candidates.Sum(c => 8L + c.Length);
+                if (!AdmitAssistance(path, span, units)) return;
+                sets.Add(match = candidates);
+            }
+            SharedChoices(path, span, match);
+            return;
+        }
         var key = (path, span.Start);
         if (!scriptChoices.TryGetValue(key, out var names))
         {
@@ -40,6 +61,7 @@ public sealed partial class LanguageProject
         }
         foreach (string name in values)
         {
+            if (names.Contains(name)) continue;
             if (names.Count >= RecoilLanguage.MaximumResults) break;
             if (!AdmitAssistance(path, span, name.Length + 1L)) break;
             names.Add(name);
@@ -52,15 +74,41 @@ public sealed partial class LanguageProject
         var (_, _, span) = GameGenLanguage.Context(doc, offset);
         var local = GameGenLanguage.Complete(doc, offset);
         string prefix = doc.Text.Substring(span.Start, Math.Clamp(offset - span.Start, 0, span.Length));
-        if (scriptChoices.TryGetValue((doc.Path, span.Start), out var names))
-            return local.Concat(names.Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        scriptChoices.TryGetValue((doc.Path, span.Start), out var names);
+        sharedScriptChoices.TryGetValue((doc.Path, span.Start), out var shared);
+        if (names != null || shared != null)
+            return local.Concat((names ?? Enumerable.Empty<string>()).Concat(shared?.SelectMany(s => s) ?? []).Distinct(StringComparer.Ordinal)
+                .Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 .Select(n => new LanguageCompletion(n, "Project reference", n, "reference", ReplacementSpan: span))).Take(RecoilLanguage.MaximumResults).ToArray();
         return local;
+    }
+    private IReadOnlyList<string> SharedCandidateSet(string path, IEnumerable<string> values)
+    {
+        var result = new List<string>();
+        foreach (string name in values.Take(MaximumReferenceNames))
+        {
+            // Strings belong to the source/world snapshot already; retain each reference once per context.
+            if (!AdmitAssistance(path, new(0, 0), 8)) break;
+            result.Add(name);
+        }
+        return result;
+    }
+    private void SharedChoices(string path, TextSpan span, IReadOnlyList<string> candidates)
+    {
+        if (assistanceLimited) return;
+        var key = (path, span.Start);
+        if (!sharedScriptChoices.TryGetValue(key, out var sets))
+        {
+            if (!AdmitAssistance(path, span, 128L + path.Length)) return;
+            sharedScriptChoices[key] = sets = [];
+        }
+        if (sets.Count < RecoilLanguage.MaximumResults && !sets.Contains(candidates)) sets.Add(candidates);
     }
     private void ResolveGameGen(SourceBuilder.Snapshot snapshot, CancellationToken token)
     {
         var files = snapshot.Files();
-        var models = SourceProject.Files(Root, "data", p => p.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".glb", StringComparison.OrdinalIgnoreCase), token: token);
+        var models = SourceProject.Files(Root, "data", p => p.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".glb", StringComparison.OrdinalIgnoreCase), token: token)
+            .Where(snapshot.IncludesSource).ToArray();
         // Literal includes remain navigable even in an orphan support script with no mission context.
         foreach (var doc in documents.Values.Where(d => d.Script != null))
             foreach (var line in doc.Script!.Lines.Where(l => l.Tokens.Count > 1 && ScriptConditions.IsSource(l.Tokens[0]) && !l.Tokens[1].Contains('%')))
@@ -68,7 +116,10 @@ public sealed partial class LanguageProject
                 string path = "gamegen/" + line.Tokens[1].Replace('\\', '/');
                 if (documents.ContainsKey(path)) ScriptLink(doc.Path, line.Spans[1], new(path, new(0, 0)));
             }
-        foreach (var entry in documents.Values.Where(d => Regex.IsMatch(d.Path, @"\Agamegen/m\d+\.gs\z", RegexOptions.IgnoreCase)))
+        foreach (var entry in documents.Values.Where(d => Game == GameVariant.MechWarrior3
+            ? d.Path.StartsWith("gamegen/", StringComparison.OrdinalIgnoreCase) && d.Path.EndsWith(".gs", StringComparison.OrdinalIgnoreCase)
+                && d.Path.Count(c => c == '/') == 1 && documents.ContainsKey($"data/{Path.GetFileNameWithoutExtension(d.Path)}/zrdr/anim.zad")
+            : Regex.IsMatch(d.Path, @"\Agamegen/m\d+\.gs\z", RegexOptions.IgnoreCase)))
         {
             token.ThrowIfCancellationRequested();
             string mission = Path.GetFileNameWithoutExtension(entry.Path).ToLowerInvariant();
@@ -81,7 +132,7 @@ public sealed partial class LanguageProject
             var operands = new ScriptOperandBudget();
             // World assembly is cached within this immutable snapshot and never exports files.
             SourceBuilder.Snapshot.AssembledWorld? built = null;
-            try { built = GameGenWorldCache.World(Root, mission, files, token); }
+            try { built = GameGenWorldCache.World(Root, mission, files, token, Game); }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             { Issue(entry, new(0, 0), "GAMEZ_CONTEXT_INCOMPLETE", "information", ex.Message); complete = false; }
             var names = new Dictionary<string, List<LanguageLocation>>(StringComparer.Ordinal);
@@ -109,16 +160,21 @@ public sealed partial class LanguageProject
                 foreach (string warning in built.Warnings.Take(RecoilLanguage.MaximumDiagnostics))
                 {
                     Issue(entry, new(0, 0), "GAMEZ_WORLD", "warning", warning);
-                    if (warning.Contains("does not apply", StringComparison.Ordinal) || warning.Contains("does not exist", StringComparison.Ordinal)) complete = false;
+                    if (Game != GameVariant.MechWarrior3 && warning.Contains("does not apply", StringComparison.Ordinal) || warning.Contains("does not exist", StringComparison.Ordinal)) complete = false;
                 }
             }
             bool written = false;
+            var nativeNodeChoices = Game == GameVariant.MechWarrior3 ? SharedCandidateSet(entry.Path, names.Keys) : [];
+            var nativeChoiceSites = new HashSet<(string Path, TextSpan Span)>();
             try
             {
                 Run(entry.Path, 0, false);
                 // Runtime scripts have a distinct interpreter run; do not carry build macros into them.
-                macros.Clear(); assignments.Clear(); conditions = new(); dirs = new(); textures = new(); written = false;
-                string init = $"gamegen/support/init{mission}.gw", runtime = $"gamegen/{mission}_zbd.gs";
+                macros.Clear(); assignments.Clear(); dirs = new(); textures = new(); written = false;
+                bool native = Game == GameVariant.MechWarrior3;
+                conditions = new(native ? "true" : "TRUE");
+                string init = native ? $"gamegen/support/{mission}size.gw" : $"gamegen/support/init{mission}.gw", runtime = native ? entry.Path : $"gamegen/{mission}_zbd.gs";
+                if (native) { macros["USEZBD"] = "true"; macros["HARDWARE"] = "true"; }
                 if (documents.ContainsKey(init) || documents.ContainsKey(runtime)) runtimeNodes = new(new GameZWorld(), Location, runtimeWork);
                 if (documents.ContainsKey(init) && !documents.ContainsKey(runtime))
                 { complete = false; Issue(entry, new(0, 0), "GAMEZ_CONTEXT_INCOMPLETE", "information", "Mission initialization exists but the runtime world-read companion is missing."); }
@@ -133,11 +189,27 @@ public sealed partial class LanguageProject
                         if (locations.Count < RecoilLanguage.MaximumResults) locations.Add(item.Origin);
                     }
                 }
+                if (Game == GameVariant.MechWarrior3 && !names.Keys.SequenceEqual(nativeNodeChoices))
+                {
+                    var runtimeChoices = SharedCandidateSet(entry.Path, names.Keys);
+                    foreach (var site in nativeChoiceSites) SharedChoices(site.Path, site.Span, runtimeChoices);
+                }
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
             { complete = false; Issue(entry, new(0, 0), "GAMEZ_CONTEXT_INCOMPLETE", "information", ex.Message); }
-            foreach (var doc in new[] { "aiv.zrd", "aiv_easy.zrd", "aiv_hard.zrd" }.Select(Resource).OfType<LanguageDocument>().Distinct())
+            string? activeNativeReader = null;
+            foreach (var doc in (Game == GameVariant.MechWarrior3
+                ? documents.Values.Where(d => Mission(d.Path).Equals(mission, StringComparison.OrdinalIgnoreCase) && Path.GetFileName(d.Path).Equals("aiv.zrd", StringComparison.OrdinalIgnoreCase))
+                : new[] { "aiv.zrd", "aiv_easy.zrd", "aiv_hard.zrd" }.Select(Resource).OfType<LanguageDocument>()).Distinct())
             {
+                activeNativeReader = NativeReader(doc.Path);
+                if (Game == GameVariant.MechWarrior3)
+                    foreach (var row in doc.Records.Where(r => r.Parent == null && r.Values.FirstOrDefault() is { Kind: ZrdKind.Int }))
+                    {
+                        var selected = row.Values[0]; int number = unchecked((int)selected.Bits);
+                        if (number > 0 && Resource($"net_{number:00}.zrd") is { } nativeNet)
+                            ScriptLink(doc.Path, doc.Span(selected), new(nativeNet.Path, new(0, 0), activeNativeReader ?? mission));
+                    }
                 if (!complete || !doc.Complete)
                 {
                     Issue(doc, new(0, 0), "GAMEZ_CONTEXT_INCOMPLETE", "information", "Vehicle template checks are incomplete; no missing-template conclusions were made.");
@@ -147,20 +219,31 @@ public sealed partial class LanguageProject
                 {
                     string template = MissionSceneLoader.VehicleTemplateName(record.Key);
                     var vehicle = Resource("vehicle.zrd");
-                    if (vehicle is { Complete: true } && !vehicle.Records.Any(r => r.Parent == null && r.Key == template))
+                    if (Game != GameVariant.MechWarrior3 && vehicle is { Complete: true } && !vehicle.Records.Any(r => r.Parent == null && r.Key == template))
                         Issue(doc, doc.Span(record.KeyNode), "GAMEZ_AIV_DEFINITION", "warning", $"Vehicle definition '{RecoilLanguage.Shown(template)}' is absent from {vehicle.Path}; that selection does not spawn this vehicle.");
                     bool found = names.TryGetValue(record.Key, out var target) || names.TryGetValue(template, out target);
+                    if (!found && Game == GameVariant.MechWarrior3)
+                    {
+                        string library = $"data/common/mechs/models/mech_{template}.gltf";
+                        if (!files.Exists(library)) library = $"data/common/mechs/models/mech_{template}.glb";
+                        if (files.Exists(library)) { target = [new(library, new(0, 0), mission)]; found = true; }
+                        else
+                        {
+                            Issue(doc, doc.Span(record.KeyNode), "GAMEZ_CONTEXT_INCOMPLETE", "information", "Native actor selection may be supplied by the mission roster or this may be an authored placeholder; an AIV name and vehicle setting alone do not establish a required GameGen template.");
+                            continue;
+                        }
+                    }
                     if (found)
                     {
                         foreach (var location in target!) ScriptLink(doc.Path, doc.Span(record.KeyNode), location);
                     }
                     else Issue(doc, doc.Span(record.KeyNode), "GAMEZ_AIV_TEMPLATE_NOT_LOADED", "error",
                         $"GameGen does not load template '{RecoilLanguage.Shown(template)}' required by '{RecoilLanguage.Shown(record.Key)}'.");
-                    if (record.Values.FirstOrDefault() is { Kind: ZrdKind.Int } network && unchecked((int)network.Bits) > 0)
+                    if (Game != GameVariant.MechWarrior3 && record.Values.FirstOrDefault() is { Kind: ZrdKind.Int } network && unchecked((int)network.Bits) > 0)
                     {
                         var net = Resource($"net_{unchecked((int)network.Bits):00}.zrd");
                         if (net != null) ScriptLink(doc.Path, doc.Span(network), new(net.Path, new(0, 0), mission));
-                        else Issue(doc, doc.Span(network), "GAMEZ_AIV_NETWORK", "warning", $"AI network {unchecked((int)network.Bits)} is unavailable; the vehicle may remain inert.");
+                        else if (Game != GameVariant.MechWarrior3) Issue(doc, doc.Span(network), "GAMEZ_AIV_NETWORK", "warning", $"AI network {unchecked((int)network.Bits)} is unavailable; the vehicle may remain inert.");
                     }
                 }
             }
@@ -180,6 +263,7 @@ public sealed partial class LanguageProject
             }
             LanguageDocument? Resource(string file)
             {
+                if (Game == GameVariant.MechWarrior3) return NativeResources(mission, activeNativeReader, file).FirstOrDefault();
                 var candidates = documents.Values.Where(d => Path.GetFileName(d.Path).Equals(file, StringComparison.OrdinalIgnoreCase)
                     && (d.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase) || d.Path.StartsWith($"data/{mission}/", StringComparison.OrdinalIgnoreCase))).ToArray();
                 var common = candidates.Where(d => d.Path.StartsWith("data/common/", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -246,7 +330,7 @@ public sealed partial class LanguageProject
                         else Issue(doc, line.Spans[1], "GAMEZ_SOURCE_MISSING", "error", $"Cannot resolve source '{RecoilLanguage.Shown(args[0])}'.");
                         Run(source, depth + 1, runtime); continue;
                     }
-                    var command = GameGenLanguage.Command(raw);
+                    var command = GameGenLanguage.Command(raw, Game);
                     if (command == null) continue; // An ignored unknown command does not change the established world.
                     string A(int i) => args.ElementAtOrDefault(i) ?? "";
                     if (command.Name == "SetModelDirectory") dirs.Add(A(0), work, files.FolderExists);
@@ -255,8 +339,9 @@ public sealed partial class LanguageProject
                     {
                         int at = command.Name == "LensFlareTexture" ? 2 : 1;
                         string name = WorldAssembler.TextureName(texture);
-                        if (name.Length is < 1 or > 19 || texture.Contains('\\') || texture.Contains('/'))
-                            Issue(doc, line.Spans[at], "GAMEZ_TEXTURE_NAME", "warning", "Runtime textures require a basename of at most 19 characters before the first dot.");
+                        int limit = Game == GameVariant.MechWarrior3 ? 31 : 19;
+                        if (name.Length < 1 || name.Length > limit || texture.Contains('\\') || texture.Contains('/'))
+                            Issue(doc, line.Spans[at], "GAMEZ_TEXTURE_NAME", "warning", $"Runtime textures require a basename of at most {limit} characters before the first dot.");
                         string png = name + ".png";
                         string? resolvedTexture = textures.Folders.Select(f => f + "/" + png).FirstOrDefault(files.Exists);
                         if (resolvedTexture != null) ScriptLink(path, line.Spans[at], new(resolvedTexture, new(0, 0), mission));
@@ -284,7 +369,12 @@ public sealed partial class LanguageProject
                     if (command.Name is "FindNode" or "FindSubNode" or "AddChild" or "CameraSetWorld" or "CameraSetWindow" or "WorldAddLight")
                     {
                         var span = line.Spans.Count > 1 ? line.Spans[1] : new TextSpan(line.Start + line.Length, 0);
-                        Choices(path, span, names.Keys);
+                        if (Game == GameVariant.MechWarrior3)
+                        {
+                            SharedChoices(path, span, nativeNodeChoices);
+                            nativeChoiceSites.Add((path, span));
+                        }
+                        else Choices(path, span, names.Keys);
                         if (!runtime && built?.LookupTargets.TryGetValue((path, line.Number), out var resolved) == true)
                             foreach (var node in resolved) ScriptLink(path, span, Location(node));
                         else if (runtime && command.Name is "FindNode" or "FindSubNode" && runtimeNodes?.Run(command.Name, args, new(path, span, mission)) is { } target)
@@ -308,7 +398,7 @@ public sealed partial class LanguageProject
         foreach (var doc in documents.Values.Where(d => d.Family == "placements"))
         {
             string mission = Mission(doc.Path);
-            if (mission != "common" && !documents.ContainsKey($"gamegen/{mission}.gs"))
+            if (!IsCommon(doc.Path) && !documents.ContainsKey($"gamegen/{mission}.gs"))
                 doc.Report("GAMEZ_CONTEXT_INCOMPLETE", "information", "The mission GameGen entry is missing; template availability cannot be established.", new(0, 0), mission);
         }
     }

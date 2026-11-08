@@ -3,16 +3,17 @@ using GameZ.Script.Core.Worlds;
 
 namespace GameZ.Script.Core.Language;
 
-internal sealed record GameGenCommand(string Name, string Parameters, string Description, bool Exact = false)
+internal sealed record GameGenCommand(string Name, string Parameters, string Description, bool Exact = false, int? PrefixLength = null, bool VerifiedOperands = false)
 {
     internal string[] Slots => Parameters.Split(' ', StringSplitOptions.RemoveEmptyEntries);
     internal string Help => $"**{Name} {Parameters}**\n\n{Description}\n\n" +
-        (Exact ? "Command spelling is case-sensitive and exact." : "Command dispatch uses a case-sensitive prefix.") +
+        (Exact ? "Command spelling is case-sensitive and exact." : PrefixLength is { } count && count != Name.Length
+            ? "Command dispatch matches the case-sensitive prefix `" + Name[..count] + "`." : "Command dispatch uses a case-sensitive prefix.") +
         "\n\nOperands are text tokens; script numbers do not have ZRD integer/float storage kinds. Analysis never executes file-writing commands.";
 }
 
 /// <summary>Script editor metadata. Unknown operand meanings deliberately have no invented signatures.</summary>
-internal static class GameGenLanguage
+internal static partial class GameGenLanguage
 {
     internal static bool IsScript(string path) => Path.GetExtension(path).Equals(".gs", StringComparison.OrdinalIgnoreCase)
         || Path.GetExtension(path).Equals(".gw", StringComparison.OrdinalIgnoreCase);
@@ -108,46 +109,56 @@ internal static class GameGenLanguage
             "Recognized procedural authoring command. Operand roles are not verified; unsupported world effects are reported by analysis.");
         return known.Values.OrderBy(c => c.Name, StringComparer.Ordinal).ToArray();
     }
-    internal static GameGenCommand? Command(string token)
+    internal static IReadOnlyList<GameGenCommand> ForGame(GameVariant game) => game == GameVariant.MechWarrior3 ? Mw3Commands : Commands;
+    internal static GameGenCommand? Command(string token, GameVariant game = GameVariant.Recoil)
     {
+        var commands = ForGame(game);
         // Builtins precede core dispatch. Longer core prefixes must retain the retail dispatch order.
         foreach (string builtin in new[] { "endif", "ifdef", "ifndef", "mkdir", "set", "source", "who", "var" })
-            if (token.StartsWith(builtin, StringComparison.Ordinal)) return Commands.First(c => c.Name == builtin);
+            if (token.StartsWith(builtin, StringComparison.Ordinal)) return commands.First(c => c.Name == builtin);
+        if (game == GameVariant.MechWarrior3)
+        {
+            foreach (var native in Mw3Dispatch)
+                if (native.Exact ? token == native.Name : token.AsSpan().StartsWith(native.Name.AsSpan(0, native.PrefixLength), StringComparison.Ordinal))
+                    return commands.First(c => c.Name == native.Name);
+            return commands.FirstOrDefault(c => c.Exact && c.Name == token);
+        }
         string resolved = ScriptCommands.Core(token);
         if (resolved != token) return Commands.FirstOrDefault(c => c.Name == resolved);
         return Commands.FirstOrDefault(c => c.Name == token)
             ?? Commands.Where(c => !c.Exact && token.StartsWith(c.Name, StringComparison.Ordinal)).OrderByDescending(c => c.Name.Length).FirstOrDefault();
     }
-    internal static LanguageDocument Analyze(string path, string text, CancellationToken token)
+    internal static LanguageDocument Analyze(string path, string text, CancellationToken token, GameVariant? game = null, bool legacyFallback = true)
     {
-        var doc = new LanguageDocument(path, text) { Family = "gamegen" };
-        if (text.Length > SourceProject.MaximumSourceTextBytes) { doc.Report("RECOIL_LIMIT", "information", "Document exceeds the 16 MiB analysis limit.", new(0, 0)); return doc; }
+        var doc = new LanguageDocument(path, text) { Family = "gamegen", Game = game ?? GameVariant.Recoil, HasGameProfile = legacyFallback || game != null };
+        if (text.Length > SourceProject.MaximumSourceTextBytes) { doc.Report("GAMEZ_LIMIT", "information", "Document exceeds the 16 MiB analysis limit.", new(0, 0)); return doc; }
         int invalid = text.AsSpan().IndexOfAnyExceptInRange('\u0001', '\xFF');
-        if (invalid >= 0) doc.Report("RECOIL_ENCODING", "error", "GameGen source must be Latin-1 text without NUL.", new(invalid, 1));
+        if (invalid >= 0) doc.Report("GAMEZ_ENCODING", "error", "GameGen source must be Latin-1 text without NUL.", new(invalid, 1));
         try
         {
             if (GameGenScriptText.CountTokens(text, token) > RecoilLanguage.MaximumTokens)
-            { doc.Report("RECOIL_LIMIT", "information", "Script token limit exceeded; analysis is incomplete.", new(0, 0)); return doc; }
+            { doc.Report("GAMEZ_LIMIT", "information", "Script token limit exceeded; analysis is incomplete.", new(0, 0)); return doc; }
             doc.Script = GameGenScriptSyntax.Parse(text, token);
             foreach (var line in doc.Script.Lines)
             {
                 token.ThrowIfCancellationRequested();
-                if (doc.tokens.Count + line.Tokens.Count > RecoilLanguage.MaximumTokens) { doc.Report("RECOIL_LIMIT", "information", "Script token limit exceeded; analysis is incomplete.", new(line.Start, 0)); return doc; }
+                if (doc.tokens.Count + line.Tokens.Count > RecoilLanguage.MaximumTokens) { doc.Report("GAMEZ_LIMIT", "information", "Script token limit exceeded; analysis is incomplete.", new(line.Start, 0)); return doc; }
                 for (int i = 0; i < line.Tokens.Count; i++) doc.tokens.Add(new(line.Spans[i], line.Tokens[i], i == 0 ? "command" : "operand"));
-                if (!line.IsInstruction) continue;
-                var command = Command(line.Tokens[0]);
+                if (!line.IsInstruction || !doc.HasGameProfile) continue;
+                var command = Command(line.Tokens[0], doc.Game);
                 if (command == null) { doc.Report("GAMEZ_COMMAND", "warning", $"Unrecognized case-sensitive command '{RecoilLanguage.Shown(line.Tokens[0])}'; the interpreter may ignore it.", line.Spans[0]); continue; }
                 string[] slots = command.Slots;
-                if (slots.Length > 0)
+                if (slots.Length > 0 || command.VerifiedOperands)
                 {
                     int required = slots.Count(p => !p.EndsWith('?') && !p.EndsWith("...", StringComparison.Ordinal));
                     if (line.Tokens.Count - 1 < required) doc.Report("GAMEZ_OPERANDS", "warning", $"{command.Name} expects {command.Parameters}; missing operands may default to zero or fail in the interpreter.", line.Spans[0]);
-                    if (!slots[^1].EndsWith("...", StringComparison.Ordinal) && line.Tokens.Count - 1 > slots.Length)
+                    if ((slots.Length == 0 || !slots[^1].EndsWith("...", StringComparison.Ordinal)) && line.Tokens.Count - 1 > slots.Length)
                         doc.Report("GAMEZ_OPERANDS", "warning", $"{command.Name} does not consume these extra operands.", line.Spans[slots.Length + 1]);
                 }
-                for (int i = 1; i < line.Tokens.Count && i <= slots.Length; i++)
+                if (doc.Game == GameVariant.MechWarrior3) ValidateMw3(doc, line, command);
+                for (int i = 1; i < line.Tokens.Count && slots.Length > 0 && (i <= slots.Length || doc.Game == GameVariant.MechWarrior3 && slots[^1].EndsWith("...", StringComparison.Ordinal)); i++)
                 {
-                    string role = slots[i - 1].TrimEnd('?', '.');
+                    string role = slots[Math.Min(i - 1, slots.Length - 1)].TrimEnd('?', '.');
                     doc.Arguments.Hints[line.Spans[i].Start] = new(line.Spans[i], role + ":", command.Help);
                     if (role == "enabled" && !line.Tokens[i].Contains('%') && !new[] { "on", "off", "true", "false" }.Contains(line.Tokens[i], StringComparer.OrdinalIgnoreCase))
                         doc.Report("GAMEZ_BOOLEAN", "warning", "Only on/true enables this setting; this operand disables it.", line.Spans[i]);
@@ -156,14 +167,14 @@ internal static class GameGenLanguage
                         doc.Report("GAMEZ_NUMBER", "warning", "Expected numeric text; the interpreter reads a leading number or defaults to zero.", line.Spans[i]);
                 }
             }
-            doc.Symbols = doc.Script.Lines.Where(l => l.IsInstruction && (Command(l.Tokens[0])?.Name is "set" or "source" or "LoadGameGen" or "NodeSetDescription" || l.Tokens[0].StartsWith("New", StringComparison.Ordinal) || l.Tokens[0] == "LightNew"))
+            doc.Symbols = doc.Script.Lines.Where(l => l.IsInstruction && (!doc.HasGameProfile || Command(l.Tokens[0], doc.Game)?.Name is "set" or "source" or "LoadGameGen" or "NodeSetDescription" || l.Tokens[0].StartsWith("New", StringComparison.Ordinal) || l.Tokens[0] == "LightNew"))
                 .Take(RecoilLanguage.MaximumResults).Select(l => new LanguageSymbol(string.Join(" ", l.Tokens), "property", new(l.Start, l.Length), l.Spans[0], [])).ToArray();
             doc.Complete = invalid < 0;
         }
-        catch (InvalidDataException ex) { doc.Report("RECOIL_LIMIT", "information", ex.Message, new(0, 0)); }
+        catch (InvalidDataException ex) { doc.Report("GAMEZ_LIMIT", "information", ex.Message, new(0, 0)); }
         return doc;
     }
-    private static readonly HashSet<string> NumericRoles = new("x y z xDegrees yDegrees zDegrees xScale yScale zScale horizontalDegrees verticalDegrees near far low high red green blue capacity frames framesPerSecond slot minimum maximum step value opacity intensity multiplier density priority distance count factor u v uRate vRate mission".Split(' '), StringComparer.Ordinal);
+    private static readonly HashSet<string> NumericRoles = new("x y z xDegrees yDegrees zDegrees xScale yScale zScale horizontalDegrees verticalDegrees near far low high red green blue capacity frames framesPerSecond slot minimum maximum step value opacity intensity multiplier density priority distance count factor u v uRate vRate mission tolerance speed acceleration degreesPerSecond seconds base amplitude degrees width height buffer color".Split(' '), StringComparer.Ordinal);
     internal static bool InComment(LanguageDocument doc, int offset)
     {
         offset = Math.Clamp(offset, 0, doc.Text.Length);
@@ -182,27 +193,39 @@ internal static class GameGenLanguage
     }
     internal static IReadOnlyList<LanguageCompletion> Complete(LanguageDocument doc, int offset)
     {
+        if (!doc.HasGameProfile) return [];
         if (InComment(doc, offset)) return [];
         var (line, index, span) = Context(doc, offset);
         string prefix = doc.Text.Substring(span.Start, Math.Clamp(offset - span.Start, 0, span.Length));
-        if (index == 0) return Commands.Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Take(RecoilLanguage.MaximumResults)
+        if (index == 0) return ForGame(doc.Game).Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Take(RecoilLanguage.MaximumResults)
             .Select(c => new LanguageCompletion(c.Name, c.Parameters, c.Name, Documentation: c.Help, ReplacementSpan: span)).ToArray();
-        var command = line == null ? null : Command(line.Tokens[0]);
+        var command = line == null ? null : Command(line.Tokens[0], doc.Game);
         string[] choices = command?.Slots.ElementAtOrDefault(index - 1) switch { "enabled" => ["on", "off"], "state" => ["linear", "exponential", "off"], "operation" => ["set", "="], _ => [] };
+        if (doc.Game == GameVariant.MechWarrior3 && command != null)
+        {
+            if (command.Name == "LoadGameGen" && index >= 3) choices = ["altitude_off", "intersect_off"];
+            if (command.Name == "var" && index == 1) choices = ["DamageScale"];
+            if (command.Name is "ifdef" or "ifndef" && index == 1) choices = ["USEZBD", "HARDWARE"];
+        }
         return choices.Where(c => c.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Select(c => new LanguageCompletion(c, command!.Name, c, "enumMember", command.Help, span)).ToArray();
     }
     internal static LanguageHover? Hover(LanguageDocument doc, int offset)
     {
+        if (!doc.HasGameProfile) return null;
         if (InComment(doc, offset)) return null;
         var (line, index, span) = Context(doc, offset);
-        var command = line is { IsInstruction: true } ? Command(line.Tokens[0]) : null;
-        return command == null ? null : new(command.Help + (index > 0 && index <= command.Slots.Length ? $"\n\nOperand: **{command.Slots[index - 1]}**." : ""), span);
+        var command = line is { IsInstruction: true } ? Command(line.Tokens[0], doc.Game) : null;
+        if (command == null) return null;
+        var slots = command.Slots;
+        bool operand = index > 0 && slots.Length > 0 && (index <= slots.Length || doc.Game == GameVariant.MechWarrior3 && slots[^1].EndsWith("...", StringComparison.Ordinal));
+        return new(command.Help + (operand ? $"\n\nOperand: **{slots[Math.Min(index - 1, slots.Length - 1)]}**." : ""), span);
     }
     internal static LanguageSignature? Signature(LanguageDocument doc, int offset)
     {
+        if (!doc.HasGameProfile) return null;
         if (InComment(doc, offset)) return null;
         var (line, index, _) = Context(doc, offset);
-        var command = line is { IsInstruction: true } ? Command(line.Tokens[0]) : null;
+        var command = line is { IsInstruction: true } ? Command(line.Tokens[0], doc.Game) : null;
         if (command == null || command.Slots.Length == 0 || index == 0) return null;
         return new(command.Name + " " + command.Parameters, command.Help,
             command.Slots.Select(p => new LanguageParameter(p, command.Help)).ToArray(), Math.Clamp(index - 1, 0, command.Slots.Length - 1));

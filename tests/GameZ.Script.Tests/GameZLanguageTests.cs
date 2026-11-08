@@ -30,7 +30,7 @@ public sealed class GameZLanguageTests
         Assert.DoesNotContain(Analyze(path, text).Diagnostics, d => d.Severity == "error");
         int start = text.IndexOf(number, StringComparison.Ordinal);
         string changed = text[..start] + "7" + text[(start + number.Length)..];
-        var diagnostic = Assert.Single(Analyze(path, changed).Diagnostics, d => d.Code == "RECOIL_TYPE");
+        var diagnostic = Assert.Single(Analyze(path, changed).Diagnostics, d => d.Code == "GAMEZ_TYPE");
         Assert.Equal("error", diagnostic.Severity);
         Assert.Equal(new TextSpan(start, 1), diagnostic.Span);
         Assert.Contains("7 is an integer. Use 7.0", diagnostic.Message);
@@ -44,7 +44,7 @@ public sealed class GameZLanguageTests
         Assert.Equal(2, warnings.Length);
         Assert.Equal("position is not used in common_mode. Set the vehicle's position in aiv.zrd.", warnings[0].Message);
         Assert.Equal("rotation is not used in common_mode. Set the vehicle's heading in aiv.zrd.", warnings[1].Message);
-        Assert.Single(doc.Diagnostics, d => d.Code == "RECOIL_TYPE"); // Read, even though not applied later.
+        Assert.Single(doc.Diagnostics, d => d.Code == "GAMEZ_TYPE"); // Read, even though not applied later.
         foreach (var warning in warnings)
             Assert.Equal(warning.Message.Split(' ')[0], text.Substring(warning.Span.Start, warning.Span.Length));
         Assert.DoesNotContain("Value types", RecoilLanguage.Hover(doc, text.IndexOf("position", StringComparison.Ordinal))!.Markdown);
@@ -59,7 +59,7 @@ public sealed class GameZLanguageTests
         const string font = "(SHARED_IMAGE_PATH (images) MENU (FONTS ((0 Arial 12 ((255 255 255) (0 0 0)) 1 400 LEFT))))";
         Assert.Empty(Analyze("dialog.zrd", font).Diagnostics);
         var badFont = Analyze("dialog.zrd", font.Replace("255 255", "255.0 255", StringComparison.Ordinal));
-        Assert.Single(badFont.Diagnostics, d => d.Code == "RECOIL_TYPE" && d.Severity == "error");
+        Assert.Single(badFont.Diagnostics, d => d.Code == "GAMEZ_TYPE" && d.Severity == "error");
         Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SETS (group ((sample file HIGH variant.wav))))").Diagnostics);
     }
     [Fact]
@@ -70,12 +70,12 @@ public sealed class GameZLanguageTests
         Assert.Empty(doc.Diagnostics);
         Assert.Empty(Analyze("ui.zrd", text.Replace("CAPTURE 1", "CAPTURE (1)", StringComparison.Ordinal)).Diagnostics);
         var bad = Analyze("ui.zrd", text.Replace("FONT 1 LABEL", "FONT (1) LABEL", StringComparison.Ordinal));
-        Assert.Single(bad.Diagnostics, d => d.Code == "RECOIL_TYPE" && d.Message.Contains("bare integer"));
+        Assert.Single(bad.Diagnostics, d => d.Code == "GAMEZ_TYPE" && d.Message.Contains("bare integer"));
         Assert.DoesNotContain(RecoilLanguage.Complete(doc, text.IndexOf("(RATE", StringComparison.Ordinal) + 1), c => c.Label == "RATE");
         Assert.Empty(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT 1)))").Diagnostics);
-        Assert.Single(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT (1.0))))").Diagnostics, d => d.Code == "RECOIL_TYPE");
-        Assert.Single(Analyze("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) (4.0) (0 0) (10 10) 400 (target 0 0 TRUE TRUE) (0 0 10 10)))").Diagnostics, d => d.Code == "RECOIL_TYPE");
-        Assert.Single(Analyze("ui.zrd", "(SHARED_IMAGE_PATH (images) MENU (BUTTONS (CURSOR (FONT 1.0))))").Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Single(Analyze("sounds.zrd", "(SYNTAX (2) SETS () SOUND_GROUPS ((group DELAY_REPEAT (1.0))))").Diagnostics, d => d.Code == "GAMEZ_TYPE");
+        Assert.Single(Analyze("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE) (4.0) (0 0) (10 10) 400 (target 0 0 TRUE TRUE) (0 0 10 10)))").Diagnostics, d => d.Code == "GAMEZ_TYPE");
+        Assert.Single(Analyze("ui.zrd", "(SHARED_IMAGE_PATH (images) MENU (BUTTONS (CURSOR (FONT 1.0))))").Diagnostics, d => d.Code == "GAMEZ_TYPE");
     }
     [Fact]
     public void PositionalResourceNamesDoNotBecomeFieldsAndStillResolve()
@@ -86,7 +86,7 @@ public sealed class GameZLanguageTests
         int name = text.IndexOf("VOLUME", StringComparison.Ordinal);
         Assert.Contains("sample ID", RecoilLanguage.Hover(doc, name)!.Markdown);
         Assert.Empty(RecoilLanguage.Complete(doc, name + 3));
-        Assert.Single(Analyze("sounds.zrd", text.Replace("1.0", "1", StringComparison.Ordinal)).Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Single(Analyze("sounds.zrd", text.Replace("1.0", "1", StringComparison.Ordinal)).Diagnostics, d => d.Code == "GAMEZ_TYPE");
         Assert.Empty(Analyze("sounds.zrd", "(SETS (group ((RANGE volume.wav 1.0 TRUE FALSE TRUE))))").Diagnostics);
         Assert.Empty(Analyze("effects.zrd", "(EFFECTS ((SPEED NAME (effect) SPEED 1)))").Diagnostics);
         Assert.Empty(Analyze("weapons.zrd", "(BALLISTICS (gun (IMPACT (DAMAGE_ANIM_ON_HEALTH ((1.0 RANDOM_ROTATE))))))").Diagnostics);
@@ -104,7 +104,7 @@ public sealed class GameZLanguageTests
     [InlineData("hud.zrd", "(FONTS () TYPEI ((0 0 640 480)) SENSOR ((image 0 0 FALSE FALSE)))")]
     public void RemovingRequiredNestedValuesReportsAnArityError(string path, string text)
     {
-        Assert.Single(Analyze(path, text).Diagnostics, d => d.Code == "RECOIL_ARITY" && d.Severity == "error");
+        Assert.Single(Analyze(path, text).Diagnostics, d => d.Code == "GAMEZ_ARITY" && d.Severity == "error");
     }
     [Theory]
     [InlineData("vehicle.zrd", "(stealth (common_mode (camback)))")]
@@ -238,7 +238,7 @@ public sealed class GameZLanguageTests
         const string aligned = "(MISSION1 (TYPE   RAIN))";
         Assert.Equal(["RAIN", "SNOW"], RecoilLanguage.Complete(Analyze("weather.zrd", aligned), aligned.IndexOf("TYPE", StringComparison.Ordinal) + 5).Select(c => c.Label));
         var wrapped = Analyze("weather.zrd", "(MISSION1 (TYPE (RAIN) PARTICLES (100) WIND_DIR (0.0)))");
-        Assert.Equal(3, wrapped.Diagnostics.Count(d => d.Code == "RECOIL_TYPE"));
+        Assert.Equal(3, wrapped.Diagnostics.Count(d => d.Code == "GAMEZ_TYPE"));
     }
     [Fact]
     public void EmptyPrerequisiteListIsValidAndCallHelpSeparatesPlacementFromRecipient()
@@ -246,7 +246,7 @@ public sealed class GameZLanguageTests
         const string text = "(ANIMATION_DEFINITIONS (ANIMATION_LIST (ANIMATION_DEFINITION (NAME (root) ACTIVATION_PREREQUISITE (REQUIRED (ANIMATION_LIST ()))))))";
         Assert.Empty(Analyze("a.zad", text).Diagnostics);
         var invalid = Analyze("a.zad", text.Replace("REQUIRED (ANIMATION_LIST ()", "REQUIRED (ANIMATION_LIST (first 2)", StringComparison.Ordinal));
-        Assert.Contains(invalid.Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.Contains(invalid.Diagnostics, d => d.Code == "GAMEZ_TYPE");
         var doc = Analyze("a.zad", Animation("CALL_ANIMATION (NAME (child) WITH_NODE (position) OPERAND_NODE (actor))"));
         Assert.Contains("positional reference", RecoilLanguage.Hover(doc, doc.Text.IndexOf("WITH_NODE", StringComparison.Ordinal))!.Markdown);
         Assert.Contains("recipient", RecoilLanguage.Hover(doc, doc.Text.IndexOf("OPERAND_NODE", StringComparison.Ordinal))!.Markdown);
@@ -264,7 +264,7 @@ public sealed class GameZLanguageTests
     public void NumericKindsFollowTheResourceConsumerAndSyntaxSpansPointAtTheToken()
     {
         var weapon = Analyze("weapons.zrd", "(BALLISTICS (wep_1 (DAMAGE (10) AMMO_LIMIT (10.0))))");
-        Assert.Equal(2, weapon.Diagnostics.Count(d => d.Code == "RECOIL_TYPE"));
+        Assert.Equal(2, weapon.Diagnostics.Count(d => d.Code == "GAMEZ_TYPE"));
         var good = Analyze("weapons.zrd", "(BALLISTICS (wep_1 (DAMAGE (10.0) AMMO_LIMIT (10))))");
         Assert.Empty(good.Diagnostics);
         string invalid = "(VALUE (12x))";
@@ -285,7 +285,7 @@ public sealed class GameZLanguageTests
         var doc = Analyze("dialog.zrd", "(MAINMENU (FONTS ((0 Arial 20 (255 255 255) 1 500)) EFFECTS (NAME (image 0 0))))");
         Assert.Equal("ui", doc.Family); Assert.Empty(doc.Diagnostics);
         var hud = Analyze("hud.zrd", "(FONTS (OBJ_SUMMARY (font1)) TYPEI () RETICULE (one two))");
-        Assert.Equal("hud", hud.Family); Assert.Contains(hud.Diagnostics, d => d.Code == "RECOIL_ARITY");
+        Assert.Equal("hud", hud.Family); Assert.Contains(hud.Diagnostics, d => d.Code == "GAMEZ_ARITY");
     }
     [Fact]
     public void NetworkSpatialLinksUseTheNestedRecordShape()
@@ -316,7 +316,7 @@ public sealed class GameZLanguageTests
         string partial = text[..text.LastIndexOf("root_b", StringComparison.Ordinal)];
         var overlay = LanguageProject.Analyze(fixture.Project, new Dictionary<string, string> { [path] = partial }, token: TestContext.Current.CancellationToken);
         Assert.Contains(overlay.Complete(path, partial.Length), c => c.Label == "root_b");
-        Assert.Contains(overlay.Documents[path].Diagnostics, d => d.Code == "RECOIL_SYNTAX");
+        Assert.Contains(overlay.Documents[path].Diagnostics, d => d.Code == "GAMEZ_SYNTAX");
         partial = partial.Replace("CALL_ANIMATION", "CALL_SEQUENCE", StringComparison.Ordinal);
         overlay = LanguageProject.Analyze(fixture.Project, new Dictionary<string, string> { [path] = partial }, token: TestContext.Current.CancellationToken);
         Assert.Contains(overlay.Complete(path, partial.Length), c => c.Label == "main");
@@ -336,7 +336,7 @@ public sealed class GameZLanguageTests
         string changed = project.Documents[child].Text.Replace("ANIMATION_NAME (child)", "ANIMATION_NAME (renamed)", StringComparison.Ordinal);
         var overlay = LanguageProject.Analyze(fixture.Project, new Dictionary<string, string> { [child] = changed }, token: TestContext.Current.CancellationToken);
         Assert.Empty(overlay.Definition(start, startup.Text.IndexOf("child", StringComparison.Ordinal)));
-        Assert.Contains(overlay.Documents[start].Diagnostics, d => d.Code == "RECOIL_REFERENCE");
+        Assert.Contains(overlay.Documents[start].Diagnostics, d => d.Code == "GAMEZ_REFERENCE");
         Assert.Contains("ANIMATION_NAME (child)", File.ReadAllText(Path.Combine(fixture.Project, child)));
     }
 }

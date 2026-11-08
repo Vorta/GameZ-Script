@@ -40,7 +40,7 @@ internal sealed class ScriptTraceBudget(long maximumUnits = ScriptTraceBudget.Ma
 /// (IsMacroTrue, 0x4C1710); several combine left to right with <c>||</c> and <c>&amp;&amp;</c> (EvalConditionExpr, 0x4C1B50).
 /// Macro names are case-sensitive.
 /// </summary>
-internal sealed class ScriptConditions
+internal sealed class ScriptConditions(string trueWord = "TRUE")
 {
     private int skipping;
     public static bool IsQuit(string command) => command == "Quit";
@@ -95,9 +95,9 @@ internal sealed class ScriptConditions
         }
     }
 
-    private static bool Evaluate(IReadOnlyList<string> tokens, IReadOnlyDictionary<string, string> macros)
+    private bool Evaluate(IReadOnlyList<string> tokens, IReadOnlyDictionary<string, string> macros)
     {
-        bool True(string name) => macros.TryGetValue(name, out string? value) && value == "TRUE";
+        bool True(string name) => macros.TryGetValue(name, out string? value) && value == trueWord;
         if (tokens.Count == 1) return false;
         int op = 0; bool result = false;
         for (int i = 1; i < tokens.Count;)
@@ -131,21 +131,22 @@ public static class ScriptTrace
         => Trace(script, entry, notes, new ScriptTraceBudget());
 
     internal static List<TracedInstruction> Trace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry, List<string> notes, ScriptTraceBudget budget,
-        BoundedDiagnostics? diagnostics = null, CancellationToken token = default, Func<string, bool>? folderExists = null)
-        => RunTrace(script, entry, notes, budget, diagnostics, null, true, folderExists, token);
+        BoundedDiagnostics? diagnostics = null, CancellationToken token = default, Func<string, bool>? folderExists = null, GameVariant game = GameVariant.Recoil)
+        => RunTrace(script, entry, notes, budget, diagnostics, null, true, folderExists, token, game);
 
     /// <summary>Observe executed operands without retaining instruction history, optionally including post-write scripts.</summary>
     internal static void Visit(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         Action<TracedInstruction> inspect, CancellationToken token, bool stopAtWorldWrite = true, ScriptTraceBudget? budget = null,
-        Func<string, bool>? folderExists = null)
-        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, folderExists, token);
+        Func<string, bool>? folderExists = null, GameVariant game = GameVariant.Recoil)
+        => RunTrace(script, entry, [], budget ?? new(), null, inspect, stopAtWorldWrite, folderExists, token, game);
 
     private static List<TracedInstruction> RunTrace(Func<string, IReadOnlyList<IReadOnlyList<string>>?> script, string entry,
         List<string> notes, ScriptTraceBudget budget, BoundedDiagnostics? diagnostics, Action<TracedInstruction>? inspect,
-        bool stopAtWorldWrite, Func<string, bool>? folderExists, CancellationToken token)
+        bool stopAtWorldWrite, Func<string, bool>? folderExists, CancellationToken token, GameVariant game)
     {
         diagnostics ??= new(notes);
         List<TracedInstruction> result = []; Dictionary<string, string> variables = new(StringComparer.Ordinal);
+        if (game == GameVariant.MechWarrior3) variables.Add("COMPILE", "TRUE");
         DirectorySearchList directories = new(), textures = new(); bool written = false; ScriptConditions conditions = new();
         // As many instructions as the build runs: scripts sourcing each other repeatedly would otherwise multiply.
         int instructions = 0;

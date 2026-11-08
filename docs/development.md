@@ -2,7 +2,7 @@
 
 The extension client is in `extension/`. `src/GameZ.Script.LanguageServer` implements LSP over standard input/output. `src/GameZ.Script.Core/Language` owns analysis and metadata. The rest of Core is the repository's parser, source-format, compiler and world-validation support snapshot. Keeping this source in the repository preserves the existing deep validation without an installed editor, sibling checkout, submodule or downloaded zStudio binary.
 
-The sources were extracted from MIT-licensed zStudio commit `4fbb958a1e381f73cf9fc7d0d212fa7964f33318`. The license is retained at the repository root and in the VSIX. Namespaces and assemblies are `GameZ.Script.*`; extension commands remain `gamez.*`. References to `.zstudio` inside the source-format code describe compatible project files and must not be renamed as product branding.
+The sources were extracted from MIT-licensed zStudio commit `4fbb958a1e381f73cf9fc7d0d212fa7964f33318`. Native MW3 source support incorporates the MIT zStudio changes from `675d34b2` through `831830bf`, adapted into this repository's owned sources. The license is retained at the repository root and in the VSIX. Namespaces and assemblies are `GameZ.Script.*`; extension commands remain `gamez.*`. References to `.zstudio` inside the source-format code describe compatible project files and must not be renamed as product branding.
 
 Use the .NET SDK selected by `global.json` and Node.js with npm. From this repository:
 

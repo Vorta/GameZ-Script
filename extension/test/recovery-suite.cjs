@@ -10,8 +10,9 @@ exports.run = async function() {
   await vscode.workspace.fs.writeFile(uri,Buffer.from(disk));
   const doc = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(doc);
-  await extension.activate(); // Must finish even when launch/initialization fails.
+  const api=await extension.activate(); // Must finish even when launch/initialization fails.
   assert(extension.isActive,'Extension remains active and its recovery command is available');
+  assert.equal(api.getGameStatus().text,'GameZ: Unavailable','Failed startup cannot retain a previous game label');
   const text = '(bft (common_mode (camback ((0.0 4.0 9.0) (0.0 3.0 2.0) (0.0 2.0 1.0)) weapons ((wep_2.0\n1\n0\n3\n1.2\n5.0\n5.0\n1\n1)))))';
   await editor.edit(edit=>edit.replace(new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length)),text));
   const server = path.join(extension.extensionPath,'server/GameZ.Script.LanguageServer.exe');
@@ -20,6 +21,8 @@ exports.run = async function() {
   fs.mkdirSync(path.dirname(server),{recursive:true});
   fs.copyFileSync(process.env.GAMEZ_RECOVERY_SERVER_SOURCE,server);
   await Promise.all([vscode.commands.executeCommand('gamez.restartLanguageServer'),vscode.commands.executeCommand('gamez.restartLanguageServer')]);
+  for(let attempt=0;attempt<100&&api.getGameStatus().profile?.game!=='recoil';attempt++) await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(api.getGameStatus().text,'GameZ: RECOIL','Recovered server restores the active game indicator');
   const range = new vscode.Range(doc.positionAt(0),doc.positionAt(doc.getText().length));
   const hints = await vscode.commands.executeCommand('vscode.executeInlayHintProvider',uri,range);
   assert.equal(hints.length,18,'One recovered provider returns exactly one set of hints');

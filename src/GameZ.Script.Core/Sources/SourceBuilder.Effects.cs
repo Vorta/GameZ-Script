@@ -138,6 +138,7 @@ public static partial class SourceBuilder
             {
                 SpendWork(128L + 4L * path.Length, token);
                 if (folder == "data/common" && !path.AsSpan().Contains("/zrdr/", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!snapshot.IncludesSource(path)) continue;
                 found.Add(path);
             }
             return found;

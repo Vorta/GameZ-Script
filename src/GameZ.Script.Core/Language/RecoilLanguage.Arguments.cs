@@ -28,6 +28,7 @@ public static partial class RecoilLanguage
     public static LanguageInlayHints InlayHints(LanguageDocument document, TextSpan range, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        if (!document.HasGameProfile && !document.Family.StartsWith("zan-", StringComparison.Ordinal)) return new([], false);
         List<LanguageInlayHint> items = [];
         foreach (var hint in document.Arguments.Hints.Values.OrderBy(h => h.Span.Start))
         {
@@ -65,11 +66,13 @@ public static partial class RecoilLanguage
         : container.Repeat && container.Parameters.Length > 0 ? container.Parameters[^1] : null;
 
     internal static bool AcceptsReferenceCompletion(LanguageDocument document, int offset) =>
-        ArgumentContext(document, offset) is not { } context
-        || Parameter(context.Container, context.Index) is { Type: "s" or "s?", InactiveReason: null };
+        document.HasGameProfile && (ArgumentContext(document, offset) is not { } context
+        || Parameter(context.Container, context.Index) is { InactiveReason: null } parameter
+            && (parameter.Type is "s" or "s?" || document.Game == GameVariant.MechWarrior3 && parameter.Type == "x" && parameter.Role != null));
 
     public static LanguageSignature? SignatureHelp(LanguageDocument document, int offset)
     {
+        if (!document.HasGameProfile && !document.Family.StartsWith("zan-", StringComparison.Ordinal)) return null;
         if (document.Script != null) return GameGenLanguage.Signature(document, offset);
         if (InComment(document, offset)) return null;
         if (ArgumentContext(document, offset) is not { } context) return null;
@@ -166,8 +169,8 @@ public static partial class RecoilLanguage
             if (spec == null) return [];
             if (spec.Role == "network-link")
                 return new[] { new LanguageCompletion("-1", "No outgoing link", "-1", "enumMember", ArgumentDocumentation(spec)) }
-                    .Concat(doc.Records.Where(r => r.Parent == null && NetworkNodeIndex(r.Key) is not null && r.Value?.Kind == ZrdKind.Array)
-                        .Select(r => NetworkNodeIndex(r.Key)!.Value).Distinct().Order()
+                    .Concat(doc.Records.Where(r => r.Parent == null && NetworkNodeIndex(doc, r.Key) is not null && r.Value?.Kind == ZrdKind.Array)
+                        .Select(r => NetworkNodeIndex(doc, r.Key)!.Value).Distinct().Order()
                         .Select(n => new LanguageCompletion(n.ToString(CultureInfo.InvariantCulture), $"Link to node_{n:00}",
                             n.ToString(CultureInfo.InvariantCulture), "enumMember", ArgumentDocumentation(spec)))).ToArray();
             if (spec.Role == "callback") return CallbackIds.Select(p => new LanguageCompletion(p.Key.ToString(CultureInfo.InvariantCulture),
@@ -190,7 +193,7 @@ public static partial class RecoilLanguage
             }
             return [];
         }
-        if (doc.Family == "network" && Context(doc, offset).All(p => p.Length == 0))
+        if (doc.Game == GameVariant.Recoil && doc.Family == "network" && Context(doc, offset).All(p => p.Length == 0))
         {
             var items = Fields("network", "").Where(f => f.Suggested)
                 .Select(f => new LanguageCompletion(f.Name, f.Description, f.Name, Documentation: FieldDocumentation(f))).ToList();
@@ -216,4 +219,7 @@ public static partial class RecoilLanguage
 
     private static int? NetworkNodeIndex(string name) => name.Length == 7 && name.StartsWith("node_", StringComparison.Ordinal)
         && char.IsAsciiDigit(name[5]) && char.IsAsciiDigit(name[6]) && int.TryParse(name.AsSpan(5), out int n) && n <= 98 ? n : null;
+    private static int? NetworkNodeIndex(LanguageDocument doc, string name) => doc.Game == GameVariant.MechWarrior3
+        ? name.StartsWith("node_", StringComparison.Ordinal) && int.TryParse(name.AsSpan(5), out int n) && n >= 0 ? n : null
+        : NetworkNodeIndex(name);
 }

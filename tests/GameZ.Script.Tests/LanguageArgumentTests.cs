@@ -44,7 +44,7 @@ public sealed class LanguageArgumentTests
     public void UnfinishedVehicleTuplesKeepHints(string text, string expected, int count)
     {
         var doc = Doc("vehicle.zrd", text);
-        Assert.Contains(doc.Diagnostics, d => d.Code == "RECOIL_SYNTAX");
+        Assert.Contains(doc.Diagnostics, d => d.Code == "GAMEZ_SYNTAX");
         Assert.Equal(count, Hints(doc).Count);
         Assert.Contains(Hints(doc), h => h.Label == expected);
     }
@@ -84,7 +84,7 @@ public sealed class LanguageArgumentTests
     public void IncompleteNodeOffersContextAndRetainsSyntaxError(string text, string? completion, string parameter)
     {
         var doc = Doc("net_01.zrd", text);
-        Assert.Contains(doc.Diagnostics, d => d.Code == "RECOIL_SYNTAX");
+        Assert.Contains(doc.Diagnostics, d => d.Code == "GAMEZ_SYNTAX");
         if (completion != null) Assert.Contains(RecoilLanguage.Complete(doc, text.Length), c => c.Label == completion);
         var signature = RecoilLanguage.SignatureHelp(doc, text.Length);
         Assert.NotNull(signature);
@@ -287,7 +287,7 @@ public sealed class LanguageArgumentTests
         var hint = Assert.Single(Hints(doc), h => h.Label == "event ID:");
         Assert.Contains("Disable single-player", hint.Documentation);
         Assert.Contains("truncating", hint.Documentation);
-        Assert.DoesNotContain(doc.Diagnostics, d => d.Code == "RECOIL_TYPE");
+        Assert.DoesNotContain(doc.Diagnostics, d => d.Code == "GAMEZ_TYPE");
     }
 
     [Fact]

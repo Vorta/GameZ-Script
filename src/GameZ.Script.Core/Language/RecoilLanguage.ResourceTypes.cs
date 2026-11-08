@@ -140,7 +140,7 @@ public static partial class RecoilLanguage
         string parent = record.Parent?.Key ?? "";
         int minimum = MinimumResourceValues(doc, record);
         if (record.Values.Count < minimum)
-            doc.Report("RECOIL_ARITY", "error", $"{record.Key} requires at least {minimum} values; found {record.Values.Count}.", doc.Span(record.Value!));
+            doc.Report("GAMEZ_ARITY", "error", $"{record.Key} requires at least {minimum} values; found {record.Values.Count}.", doc.Span(record.Value!));
         void Rows(string shape, int maximum = int.MaxValue)
         {
             foreach (var row in record.Values.Take(maximum))
@@ -151,7 +151,7 @@ public static partial class RecoilLanguage
             for (int i = 0; i < Math.Min(record.Values.Count, shapes.Length); i++)
             {
                 if (shapes[i].Length == 1 && record.Values[i].Kind == ZrdKind.Array)
-                    doc.Report("RECOIL_TYPE", "error", $"{record.Key} value {i + 1} requires a bare {ReadableShape(shapes[i])}, without parentheses around the value.", doc.Span(record.Values[i]));
+                    doc.Report("GAMEZ_TYPE", "error", $"{record.Key} value {i + 1} requires a bare {ReadableShape(shapes[i])}, without parentheses around the value.", doc.Span(record.Values[i]));
                 else if (shapes[i].Length > 0) CheckTuple(doc, record, record.Values[i], shapes[i]);
             }
         }

@@ -13,9 +13,9 @@
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <Company>Vorta</Company>
     <Product>GameZ Script</Product>
-    <Description>GameZ Script language tools for RECOIL</Description>
+    <Description>GameZ Script language tools for RECOIL and MechWarrior 3</Description>
     <RepositoryUrl>https://github.com/Vorta/GameZ-Script</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
   </PropertyGroup>
 </Project>
